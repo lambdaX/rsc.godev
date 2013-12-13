@@ -1,0 +1,21 @@
+runtime: go
+api_version: go1
+
+application: go-dev
+version: 1
+
+handlers:
+- url: /admin(/.*)?
+  script: _go_app
+  login: admin
+  secure: always
+
+- url: /login
+  script: _go_app
+  login: required
+  secure: always
+
+# MUST BE LAST
+- url: /.*
+  script: _go_app
+  secure: always

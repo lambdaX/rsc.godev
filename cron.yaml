@@ -1,0 +1,7 @@
+cron:
+- description: app master cron
+  url: /admin/app/cron
+  schedule: every 1 minutes
+- description: poll mercurial repositories
+  url: /admin/commit/load
+  schedule: every 5 minutes

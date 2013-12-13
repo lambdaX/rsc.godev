@@ -1,0 +1,7 @@
+total_storage_limit: 1000M
+queue:
+- name: cron
+  rate: 10/s
+
+- name: scandata
+  rate: 500/s
