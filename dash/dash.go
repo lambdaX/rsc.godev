@@ -36,6 +36,22 @@ type Item struct {
 	CLs []*codereview.CL
 }
 
+type itemsBySummary []*Item
+
+func (x itemsBySummary) Len() int           { return len(x) }
+func (x itemsBySummary) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+func (x itemsBySummary) Less(i, j int) bool { return itemSummary(x[i]) < itemSummary(x[j]) }
+
+func itemSummary(it *Item) string {
+	if it.Bug != nil {
+		return it.Bug.Summary
+	}
+	for _, cl := range it.CLs {
+		return cl.Summary
+	}
+	return ""
+}
+
 func showDash(w http.ResponseWriter, req *http.Request) {
 	const chunk = 1000
 	ctxt := appengine.NewContext(req)
@@ -56,6 +72,7 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 	var bugs []*issue.Issue
 	_, err = datastore.NewQuery("Issue").
 		Filter("State =", "open").
+		Filter("Label =", "Release-Go1.3").
 		Limit(chunk).
 		GetAll(ctxt, &bugs)
 	if err != nil {
@@ -96,6 +113,10 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 			item := &Item{CLs: []*codereview.CL{cl}}
 			addGroup(item)
 		}
+	}
+	
+	for _, g := range groups {
+		sort.Sort(itemsBySummary(g.Items))
 	}
 
 	t, err := template.New("main").Funcs(template.FuncMap{
