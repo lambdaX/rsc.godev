@@ -71,7 +71,7 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 
 	// There are some CLs in datastore that are not active but
 	// have not been updated to DV 6 yet and still say Active=true
-	// in the datastore index; filter those out.	
+	// in the datastore index; filter those out.
 	out := cls[:0]
 	for _, cl := range cls {
 		if cl.Active {
@@ -125,7 +125,7 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 			addGroup(item)
 		}
 	}
-	
+
 	for _, g := range groups {
 		sort.Sort(itemsBySummary(g.Items))
 	}

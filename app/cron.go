@@ -115,7 +115,7 @@ func cronHandler(w http.ResponseWriter, req *http.Request) {
 	for _, cr := range list {
 		if now.Round(cr.dt) != old.Round(cr.dt) || force {
 			ctxt.Infof("start cron %s", cr.name)
-			Task(ctxt, "app.cron." + cr.name, "cron", cr.name)
+			Task(ctxt, "app.cron."+cr.name, "cron", cr.name)
 		}
 	}
 }

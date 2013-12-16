@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	
+
 	"appengine"
 	"appengine/taskqueue"
 )
@@ -160,7 +160,7 @@ func taskpost(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	
+
 	ctxt.Infof("taskpost %q %q", taskName, funcName)
 
 	taskfuncs.RLock()
@@ -212,7 +212,7 @@ func taskpost(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Success!
-	Unlock(ctxt, "Task." + taskName)
+	Unlock(ctxt, "Task."+taskName)
 	return
 }
 

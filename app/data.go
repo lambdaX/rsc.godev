@@ -377,4 +377,3 @@ func scanDataExec(ctxt appengine.Context, name, kind, key string) {
 		ctxt.Errorf("scandata %q %q %q: %v", name, kind, key, err)
 	}
 }
-
