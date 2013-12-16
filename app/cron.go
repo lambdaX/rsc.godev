@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"html"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -35,13 +33,18 @@ type cronEntry struct {
 // Each call to Cron must use a unique name; Cron uses that name internally
 // to identify the work being done.
 //
-// Apps using cron must add a definition for the cron queue to queue.yaml:
+// Apps using cron must add a definition for the cron queue to queue.yaml, like:
 //
-//	XXX
+//	queue:
+//	- name: cron
+//	  rate: 10/s
 //
-// Apps using cron must also add a master app engine cron job to cron.yaml:
+// Apps using cron must also add a master app engine cron job to cron.yaml, like:
 //
-//	XXX
+//	cron:
+//	- description: app master cron
+//	  url: /admin/app/cron
+//	  schedule: every 1 minutes
 //
 func Cron(name string, period time.Duration, f func(appengine.Context) error) {
 	cron.Lock()
@@ -69,10 +72,14 @@ func init() {
 // we want the retry to happen quickly. Especially if this happens
 // multiple times, we don't want the backoff to grow to something huge.
 // We impose a retry limit of 1000 retries to avoid true runaways.
-var cronRetryOptions = &taskqueue.RetryOptions{
+var cronRetry = &taskqueue.RetryOptions{
 	RetryLimit: 1000,
 	MinBackoff: 1 * time.Second,
 	MaxBackoff: 10 * time.Second,
+}
+
+func init() {
+	TaskFunc("cron", cronExec, "cron", cronRetry)
 }
 
 // cronHandler is called by app engine cron to check for work
@@ -84,22 +91,9 @@ func cronHandler(w http.ResponseWriter, req *http.Request) {
 	cron.RUnlock()
 
 	ctxt := appengine.NewContext(req)
-
-	// Are we being called to execute a specific cron job?
-	req.ParseForm()
-	if name := req.FormValue("name"); name != "" {
-		for _, cr := range list {
-			if cr.name == name {
-				cronExec(ctxt, w, req, cr)
-				return
-			}
-		}
-		ctxt.Errorf("unknown cron name %q", name)
-		return
-	}
 	force := req.FormValue("force") == "1"
 
-	// Otherwise, we're being called by app engine master cron,
+	// We're being called by app engine master cron,
 	// so look for new work to queue in tasks.
 	now := time.Now()
 	var old time.Time
@@ -118,68 +112,45 @@ func cronHandler(w http.ResponseWriter, req *http.Request) {
 
 	ctxt.Infof("cron %v -> %v", old, now)
 
-	var batch []*taskqueue.Task
-	const maxBatch = 100
 	for _, cr := range list {
 		if now.Round(cr.dt) != old.Round(cr.dt) || force {
 			ctxt.Infof("start cron %s", cr.name)
-			t := taskqueue.NewPOSTTask("/admin/app/cron", url.Values{"name": {cr.name}})
-			t.Name = strings.Replace("app.cron."+cr.name, ".", "_", -1)
-			t.RetryOptions = cronRetryOptions
-			batch = append(batch, t)
-			if len(batch) >= maxBatch {
-				if _, err := taskqueue.AddMulti(ctxt, batch, "cron"); err != nil {
-					ctxt.Errorf("taskqueue.AddMulti cron: %v", err)
-				}
-				batch = nil
-			}
-		}
-	}
-	if len(batch) > 0 {
-		if _, err := taskqueue.AddMulti(ctxt, batch, "cron"); err != nil {
-			ctxt.Errorf("taskqueue.AddMulti cron: %v", err)
+			Task(ctxt, "app.cron." + cr.name, "cron", cr.name)
 		}
 	}
 }
 
 // cronExec runs the cron job for the given entry.
-func cronExec(ctxt appengine.Context, w http.ResponseWriter, req *http.Request, cr cronEntry) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+func cronExec(ctxt appengine.Context, name string) error {
+	cron.RLock()
+	list := cron.list
+	cron.RUnlock()
 
-	// Since we are being invoked using the task queue and we give each
-	// task a name derived from the cronEntry, there should only ever be
-	// a single instance of cronExec for a given cr running at a time,
-	// across all app instances. However, an admin might hit the URL
-	// to force something, and we don't want to conflict with that, so
-	// use a lease anyway.
-	if !Lock(ctxt, "app.cron."+cr.name, 15*time.Minute) {
-		// Report the error but do not use an error HTTP code.
-		// We do not want the task to be retried, since some other task
-		// is already taking care of it for us.
-		// (Or if not, eventually the lease will expire and the next cron
-		// invocation will run this for us.)
-		fmt.Fprintf(w, "cron job %q: already locked\n", cr.name)
-		return
+	var cr cronEntry
+	for _, cr = range list {
+		if cr.name == name {
+			goto Found
+		}
 	}
-	defer Unlock(ctxt, "app.cron."+cr.name)
+	ctxt.Errorf("unknown cron entry %q", name)
+	return nil
 
+Found:
 	if err := cr.f(ctxt); err != nil {
 		if err == ErrMoreCron {
 			// The cron job found that it had more work than it could do
 			// and wants to run again. Arrange this by making the task
 			// seem to fail.
-			w.WriteHeader(409)
-			fmt.Fprintf(w, "cron job %q wants to run some more\n", cr.name)
-			return
+			ctxt.Infof("cron job %q: ErrMoreCron", cr.name)
+			return fmt.Errorf("cron job %q wants to run some more", cr.name)
 		}
 		// The cron job failed, but there's no reason to think running it again
 		// right now will help. Let this instance finish successfully.
 		// It will run again at the next scheduled time.
-		fmt.Fprintf(w, "cron job %q: %v\n", cr.name, err)
-		return
+		ctxt.Infof("cron job %q: %v", cr.name, err)
+		return nil
 	}
-
-	fmt.Fprintf(w, "OK\n")
+	return nil
 }
 
 func cronStatus(ctxt appengine.Context) string {

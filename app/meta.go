@@ -48,3 +48,11 @@ func WriteMeta(ctxt appengine.Context, key string, v interface{}) error {
 	}
 	return WriteData(ctxt, "Meta", key, &meta{JSON: js})
 }
+
+// DeleteMeta deletes the metadata value stored in the datastore under the given key.
+//
+// If an error occurs, DeleteMeta returns it but also logs the error
+// using ctxt.Errorf.
+func DeleteMeta(ctxt appengine.Context, key string) error {
+	return DeleteData(ctxt, "Meta", key)
+}

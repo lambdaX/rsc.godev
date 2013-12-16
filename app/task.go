@@ -5,132 +5,244 @@
 package app
 
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
+	
 	"appengine"
-	"appengine/datastore"
 	"appengine/taskqueue"
 )
 
-var scan = struct {
+var taskfuncs = struct {
 	sync.RWMutex
-	m map[string]func(appengine.Context, string, string) error
+	m map[string]*taskFunc
 }{
-	m: make(map[string]func(appengine.Context, string, string) error),
+	m: make(map[string]*taskFunc),
 }
 
-// Scan registers a datastore trigger function.
-// Periodically, the app will scan the datastore for records matching
-// the query q, and for each such record will create a task
-// to run the function f.
-func ScanData(name string, period time.Duration, q *datastore.Query, f func(ctxt appengine.Context, kind, key string) error) {
-	scan.Lock()
-	defer scan.Unlock()
-	if scan.m[name] != nil {
-		panic("app.ScanData: multiple registrations for name: " + name)
+type taskFunc struct {
+	name  string
+	fn    reflect.Value
+	queue string
+	retry *taskqueue.RetryOptions
+}
+
+// TaskFunc registers a task-handling function.
+// The name is used to identify the task in future invocations
+// and must be unique across all calls to TaskFunc.
+//
+// The function fn must be a func with a first argument of type appengine.Context.
+// The values of the remaining arguments are specified when creating a task.
+// The function fn may return a single result of type error; otherwise it should
+// have no return values. When invoked as part of executing a task, the task
+// is considered to succeed if the function returns a nil error
+// (or, in the case of a function with no result, simply returns).
+//
+// Tasks created with this func use the given queue and retry options.
+// (See the App Engine taskqueue API reference for details.)
+func TaskFunc(name string, fn interface{}, queue string, retry *taskqueue.RetryOptions) {
+	v := reflect.ValueOf(fn)
+	if v.Kind() != reflect.Func {
+		panic("app.TaskFunc: fn is not a function")
 	}
-	scan.m[name] = f
-	Cron("app.scan."+name, period, func(ctxt appengine.Context) error {
-		return scanData(ctxt, name, period, q, f)
+	t := v.Type()
+	if t.NumIn() < 1 || t.In(0) != reflect.TypeOf((*appengine.Context)(nil)).Elem() {
+		panic("app.TaskFunc: fn's first argument is not appengine.Context")
+	}
+	if t.NumOut() > 1 {
+		panic("app.TaskFunc: fn has too many return values")
+	}
+	if t.NumOut() == 1 && t.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
+		panic(fmt.Sprintf("app.TaskFunc: fn's return value has type %s, need error", t.Out(0)))
+	}
+	taskfuncs.Lock()
+	defer taskfuncs.Unlock()
+	if taskfuncs.m[name] != nil {
+		panic("app.TaskFunc: multiple registrations for name: " + name)
+	}
+	tf := &taskFunc{
+		name:  name,
+		fn:    v,
+		queue: queue,
+		retry: retry,
+	}
+	taskfuncs.m[name] = tf
+}
+
+// Task creates a new task named taskName.
+// At most one such task can exist at a time. As soon as the task succeeds,
+// the name is made available for reuse.
+//
+// When the task is invoked, it will call the function registered as funcName
+// (see TaskFunc) and will pass the additional arguments to the function.
+// The arguments are checked for validity at the time the task is created.
+// If there is a type mismatch, the call to Task will panic.
+//
+// Task logs and returns an error if a task with the given name has already been
+// created and has not yet run successfully. When a task completes successfully,
+// a new task with the same name may be created immediately.
+// In order to provide immediate reuse semantics, Task stores one lease entity for
+// each pending task. Therefore, each call to Task consumes one of the five allowed
+// transaction groups in a transaction.
+func Task(ctxt appengine.Context, taskName, funcName string, args ...interface{}) error {
+	taskfuncs.RLock()
+	tf := taskfuncs.m[funcName]
+	taskfuncs.RUnlock()
+	if tf == nil {
+		panic("app.Task: unknown task function name: " + funcName)
+	}
+	t := tf.fn.Type()
+	if len(args) != t.NumIn()-1 {
+		panic(fmt.Sprintf("app.TaskFunc: wrong number of arguments for func %q: have %d, want %d", funcName, len(args), t.NumIn()-1))
+	}
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	for i, arg := range args {
+		v := reflect.ValueOf(arg)
+		if !v.IsValid() {
+			panic(fmt.Sprintf("app.TaskFunc: arg %d is nil, need non-nil value", i))
+		}
+		if !v.Type().AssignableTo(t.In(1 + i)) {
+			panic(fmt.Sprintf("app.TaskFunc: arg %d has type %s, not assignable to type %s", i, v.Type(), t.In(1+i)))
+		}
+		v = v.Convert(t.In(1 + i))
+		if err := enc.EncodeValue(v); err != nil {
+			panic(fmt.Sprintf("app.TaskFunc: gob-encoding arg %d: %v", i, err))
+		}
+	}
+
+	// Ideally we would just create the task in the App Engine task queue with the
+	// given name, and App Engine would take care of checking the name.
+	// As is often the case, however, App Engine does not provide our ideal, and
+	// so we must construct it by hand. Specifically, App Engine can take up to
+	// seven days from the time a task completes successfully until that task's
+	// name can be reused. We let App Engine create a unique App Engine name
+	// for each task, and we use datastore entries to enforce constraints on our
+	// own names.
+	if !Lock(ctxt, "Task."+taskName, 10*365*24*time.Hour) {
+		err := fmt.Errorf("app.Task: task %q already created and not yet completed", taskName)
+		ctxt.Errorf("%v", err)
+		return err
+	}
+
+	task := taskqueue.NewPOSTTask("/admin/app/taskpost", url.Values{
+		"task": {taskName},
+		"func": {funcName},
+		"gob":  {buf.String()},
 	})
-}
-
-// The only time we make a cron task retry is if the cron function
-// reports ErrMoreCron, meaning it wants more work. In that case,
-// we want the retry to happen quickly. Especially if this happens
-// multiple times, we don't want the backoff to grow to something huge.
-// We impose a retry limit of 1000 retries to avoid true runaways.
-var scanRetryOptions = &taskqueue.RetryOptions{
-	RetryLimit: 10,
-	MinBackoff: 1 * time.Second,
-	MaxBackoff: 1 * time.Hour,
-}
-
-func scanData(ctxt appengine.Context, name string, period time.Duration, q *datastore.Query, f func(ctxt appengine.Context, kind, key string) error) error {
-	// TODO: Handle even more keys by using cursor.
-	const chunk = 100000
-
-	keys, err := q.Limit(chunk).KeysOnly().GetAll(ctxt, nil)
-	if err != nil {
-		ctxt.Errorf("scandata %q: %v", name, err)
-		return nil
-	}
-
-	const maxBatch = 100
-	var batch []*taskqueue.Task
-	for _, key := range keys {
-		kind := key.Kind()
-		id := key.StringID()
-		t := taskqueue.NewPOSTTask("/admin/app/scandata", url.Values{"name": {name}, "kind": {kind}, "key": {id}})
-		t.Name = strings.Replace("app.scandata."+kind+"."+id, ".", "_", -1)
-		t.RetryOptions = scanRetryOptions
-		batch = append(batch, t)
-		if len(batch) >= maxBatch {
-			if _, err := taskqueue.AddMulti(ctxt, batch, "scandata"); err != nil {
-				ctxt.Errorf("taskqueue.AddMulti scandata %q: %v", name, err)
-			}
-			batch = nil
-		}
-	}
-	if len(batch) > 0 {
-		if _, err := taskqueue.AddMulti(ctxt, batch, "scandata"); err != nil {
-			ctxt.Errorf("taskqueue.AddMulti scandata %q: %v", name, err)
-		}
+	task.RetryOptions = tf.retry
+	if _, err := taskqueue.Add(ctxt, task, tf.queue); err != nil {
+		ctxt.Errorf("app.Task: creating task %q: taskqueue.Add: %v", taskName, err)
+		return err
 	}
 	return nil
 }
 
 func init() {
-	http.HandleFunc("/admin/app/scandata", scanDataExec)
+	http.HandleFunc("/admin/app/taskpost", taskpost)
 }
 
-func scanDataExec(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+func taskpost(w http.ResponseWriter, req *http.Request) {
 	ctxt := appengine.NewContext(req)
-
 	req.ParseForm()
-	name := req.FormValue("name")
-	kind := req.FormValue("kind")
-	key := req.FormValue("key")
-	scan.RLock()
-	f := scan.m[name]
-	scan.RUnlock()
+	taskName := req.FormValue("task")
+	funcName := req.FormValue("func")
+	gobenc := req.FormValue("gob")
+	if taskName == "" || funcName == "" {
+		ctxt.Errorf("app.Task: taskpost called with task=%q, func=%q", taskName, funcName)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	
+	ctxt.Infof("taskpost %q %q", taskName, funcName)
 
-	ctxt.Infof("scanData %q %q %q", name, kind, key)
-
-	if f == nil || name == "" || kind == "" || key == "" {
-		fmt.Fprintf(w, "missing url parameters\n")
+	taskfuncs.RLock()
+	tf := taskfuncs.m[funcName]
+	taskfuncs.RUnlock()
+	if tf == nil {
+		ctxt.Errorf("app.Task: taskpost[%q,%q]: unknown func name", taskName, funcName)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	// Since we are being invoked using the task queue and we give each
-	// task a name derived from the name,kind,key triple, there should only ever be
-	// a single instance of scanDataExec for a given name,kind,key running at a time,
-	// across all app instances. However, an admin might hit the URL
-	// to force something, and we don't want to conflict with that, so
-	// use a lease anyway.
-	lock := fmt.Sprintf("app.scandata.%s.%s.%s", name, kind, key)
-	if !Lock(ctxt, lock, 15*time.Minute) {
-		// Report the error but do not use an error HTTP code.
-		// We do not want the task to be retried, since some other task
-		// is already taking care of it for us.
-		// (Or if not, eventually the lease will expire and the next
-		// invocation will run this for us.)
-		fmt.Fprintf(w, "scandata %q: already locked\n", lock)
+	// Make sure a task does not run simultaneously on two app instances.
+	// App Engine is not supposed to let this happen, but an admin might
+	// be poking around and it's easy to guard against.
+	if !Lock(ctxt, "TaskExec."+taskName, 15*time.Minute) {
+		ctxt.Errorf("app.Task: taskpost[%q,%q]: already running", taskName, funcName)
+		w.WriteHeader(http.StatusNotAcceptable)
 		return
 	}
-	defer Unlock(ctxt, lock)
+	defer func() {
+		if err := recover(); err != nil {
+			ctxt.Errorf("app.Task: taskpost[%q,%q]: function panic: %v", taskName, funcName, err)
+		}
+		Unlock(ctxt, "TaskExec."+taskName)
+	}()
 
-	if err := f(ctxt, kind, key); err != nil {
-		ctxt.Errorf("scandata %q: %v", lock, err)
-		fmt.Fprintf(w, "scandata %q: %v\n", lock, err)
+	dec := gob.NewDecoder(strings.NewReader(gobenc))
+	var vargs []reflect.Value
+	vargs = append(vargs, reflect.ValueOf(&ctxt).Elem())
+	t := tf.fn.Type()
+	for i := 1; i < t.NumIn(); i++ {
+		v := reflect.New(t.In(i)).Elem()
+		if err := dec.DecodeValue(v); err != nil {
+			ctxt.Errorf("app.Task: taskpost[%q,%q]: arg %d: gob decode failure: %v", taskName, funcName, i, err)
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+		vargs = append(vargs, v)
+	}
+
+	ret := tf.fn.Call(vargs)
+	if len(ret) > 0 {
+		err := ret[0].Interface()
+		if err != nil {
+			ctxt.Errorf("app.Task: taskpost[%q,%q]: function returned %v", taskName, funcName, err)
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+	}
+
+	// Success!
+	Unlock(ctxt, "Task." + taskName)
+	return
+}
+
+func init() {
+	TaskFunc("ping", ping, "default", nil)
+	TaskFunc("pong", pong, "default", nil)
+	http.HandleFunc("/admin/app/pingpong", startPing)
+}
+
+func startPing(w http.ResponseWriter, req *http.Request) {
+	ctxt := appengine.NewContext(req)
+	n, _ := strconv.Atoi(req.FormValue("n"))
+	if n < 0 {
+		ctxt.Errorf("invalid pingpong %q", req.FormValue("n"))
 		return
 	}
 
-	fmt.Fprintf(w, "OK\n")
+	Task(ctxt, "ping", "ping", n)
+}
+
+func ping(ctxt appengine.Context, n int) error {
+	ctxt.Infof("ping %d", n)
+	return Task(ctxt, "pong", "pong", n)
+}
+
+func pong(ctxt appengine.Context, n int) error {
+	ctxt.Infof("pong %d", n)
+	if n <= 0 {
+		ctxt.Errorf("done!")
+		return nil
+	}
+	return Task(ctxt, "ping", "ping", n-1)
 }

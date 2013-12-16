@@ -41,7 +41,7 @@ func Lock(ctxt appengine.Context, name string, dt time.Duration) bool {
 //
 // Unlock releases a lock acquired by Lock.
 func Unlock(ctxt appengine.Context, name string) {
-	WriteMeta(ctxt, "Lock:"+name, time.Time{})
+	DeleteMeta(ctxt, "Lock:"+name)
 }
 
 func breaklock(w http.ResponseWriter, req *http.Request) {

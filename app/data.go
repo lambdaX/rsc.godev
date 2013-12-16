@@ -17,6 +17,7 @@ import (
 	"appengine"
 	"appengine/datastore"
 	"appengine/delay"
+	"appengine/taskqueue"
 )
 
 var updaters struct {
@@ -234,7 +235,11 @@ func updateStatus(ctxt appengine.Context) string {
 	return "<pre>" + html.EscapeString(w.String()) + "</pre>\n"
 }
 
-func backgroundUpdate(ctxt appengine.Context) {
+func init() {
+	Cron("app.update", 5*time.Minute, backgroundUpdate)
+}
+
+func backgroundUpdate(ctxt appengine.Context) error {
 	var kinds []string
 	updaters.RLock()
 	for kind := range updaters.types {
@@ -246,6 +251,7 @@ func backgroundUpdate(ctxt appengine.Context) {
 	for _, kind := range kinds {
 		laterUpdateKind.Call(ctxt, kind)
 	}
+	return nil
 }
 
 var laterUpdateKind *delay.Function
@@ -300,3 +306,75 @@ func backgroundUpdateKind(ctxt appengine.Context, kind string) {
 		laterUpdateKind.Call(ctxt, kind)
 	}
 }
+
+var scan = struct {
+	sync.RWMutex
+	m map[string]func(appengine.Context, string, string) error
+}{
+	m: make(map[string]func(appengine.Context, string, string) error),
+}
+
+// Scan registers a datastore trigger function.
+// Periodically, the app will scan the datastore for records matching
+// the query q, and for each such record will create a task
+// to run the function f.
+func ScanData(name string, period time.Duration, q *datastore.Query, f func(ctxt appengine.Context, kind, key string) error) {
+	scan.Lock()
+	defer scan.Unlock()
+	if scan.m[name] != nil {
+		panic("app.ScanData: multiple registrations for name: " + name)
+	}
+	scan.m[name] = f
+	Cron("app.scan."+name, period, func(ctxt appengine.Context) error {
+		scanData(ctxt, name, period, q, f)
+		return nil
+	})
+}
+
+// The only time we make a cron task retry is if the cron function
+// reports ErrMoreCron, meaning it wants more work. In that case,
+// we want the retry to happen quickly. Especially if this happens
+// multiple times, we don't want the backoff to grow to something huge.
+// We impose a retry limit of 1000 retries to avoid true runaways.
+var scanRetry = &taskqueue.RetryOptions{
+	RetryLimit: 10,
+	MinBackoff: 1 * time.Second,
+	MaxBackoff: 1 * time.Hour,
+}
+
+func scanData(ctxt appengine.Context, name string, period time.Duration, q *datastore.Query, f func(ctxt appengine.Context, kind, key string) error) {
+	// TODO: Handle even more keys by using cursor.
+	const chunk = 100000
+
+	keys, err := q.Limit(chunk).KeysOnly().GetAll(ctxt, nil)
+	if err != nil {
+		ctxt.Errorf("scandata %q: %v", name, err)
+		return
+	}
+
+	const maxBatch = 100
+	for _, key := range keys {
+		Task(ctxt, fmt.Sprintf("app.scandata.%s.%s", key.Kind(), key.StringID()), "scandata", name, key.Kind(), key.StringID())
+	}
+}
+
+func init() {
+	TaskFunc("scandata", scanDataExec, "scandata", scanRetry)
+}
+
+func scanDataExec(ctxt appengine.Context, name, kind, key string) {
+	scan.RLock()
+	f := scan.m[name]
+	scan.RUnlock()
+
+	ctxt.Infof("scanData %q %q %q", name, kind, key)
+
+	if f == nil || name == "" || kind == "" || key == "" {
+		ctxt.Errorf("missing parameters")
+	}
+
+	if err := f(ctxt, kind, key); err != nil {
+		ctxt.Errorf("scandata %q %q %q: %v", name, kind, key, err)
+	}
+}
+

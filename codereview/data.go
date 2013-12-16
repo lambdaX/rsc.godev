@@ -12,7 +12,7 @@ import (
 )
 
 type CL struct {
-	DV int `dataversion:"5"`
+	DV int `dataversion:"6"`
 
 	// Fields mirrored from codereview.appspot.com.
 	// If you add a field here, update load.go.

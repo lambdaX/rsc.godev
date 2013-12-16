@@ -69,6 +69,17 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// There are some CLs in datastore that are not active but
+	// have not been updated to DV 6 yet and still say Active=true
+	// in the datastore index; filter those out.	
+	out := cls[:0]
+	for _, cl := range cls {
+		if cl.Active {
+			out = append(out, cl)
+		}
+	}
+	cls = out
+
 	var bugs []*issue.Issue
 	_, err = datastore.NewQuery("Issue").
 		Filter("State =", "open").
