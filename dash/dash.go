@@ -8,22 +8,26 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"io/ioutil"
 	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"app"
 	"codereview"
 	"issue"
 
 	"appengine"
 	"appengine/datastore"
+	"appengine/user"
 )
 
 func init() {
 	http.HandleFunc("/", showDash)
-	http.HandleFunc("/issue", showIssueDash)
+	http.HandleFunc("/uiop", uiOperation)
 }
 
 type Group struct {
@@ -52,7 +56,67 @@ func itemSummary(it *Item) string {
 	return ""
 }
 
+func dirKey(s string) string {
+	if strings.Contains(s, ".") {
+		return "\x7F" + s
+	}
+	return s
+}
+
+func shortEmail(s interface{}) interface{} {
+	switch s := s.(type) {
+	case string:
+		if i := strings.Index(s, "@"); i >= 0 {
+			return s[:i]
+		}
+		return s
+	case []string:
+		v := make([]string, len(s))
+		for i, t := range s {
+			v[i] = shortEmail(t).(string)
+		}
+		return v
+	default:
+		return s
+	}
+	return s
+}
+
+func oldTime(t time.Time) bool {
+	return time.Since(t) > 7*24*time.Hour
+}
+
+func comma(s []string) string {
+	return strings.Join(s, ",")
+}
+
+func space(s []string) string {
+	return strings.Join(s, " ")
+}
+
+func since(t time.Time) string {
+	dt := time.Since(t)
+	return fmt.Sprintf("%.1f days ago", float64(dt)/float64(24*time.Hour))
+}
+
+func findSelf(ctxt appengine.Context) string {
+	self := ""
+	u := user.Current(ctxt)
+	if u != nil {
+		self = codereview.IsReviewer(u.Email)
+	}
+	return self
+}
+
 func showDash(w http.ResponseWriter, req *http.Request) {
+	if req.URL.Path == "/login" {
+		http.Redirect(w, req, "/", 302)
+		return
+	}
+	if req.URL.Path != "/" {
+		http.ServeFile(w, req, "static/"+req.URL.Path)
+		return
+	}
 	const chunk = 1000
 	ctxt := appengine.NewContext(req)
 	ctxt.Errorf("DASH")
@@ -97,10 +161,10 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 
 	addGroup := func(item *Item) {
 		dir := itemDir(item)
-		g := groups[dir]
+		g := groups[dirKey(dir)]
 		if g == nil {
 			g = &Group{Dir: dir}
-			groups[dir] = g
+			groups[dirKey(dir)] = g
 		}
 		g.Items = append(g.Items, item)
 	}
@@ -130,45 +194,97 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		sort.Sort(itemsBySummary(g.Items))
 	}
 
+	// TODO: Rewrite.
+
+	nrow := 0
+	self := findSelf(ctxt)
+	isme := func(s string) bool { return s == self || s == "golang-dev" }
+	defaultReviewer := func(cl *codereview.CL) string {
+		if cl.PrimaryReviewer == "" {
+			return "golang-dev"
+		}
+		return cl.PrimaryReviewer
+	}
+
+	var pref UserPref
+	if self != "" {
+		app.ReadData(ctxt, "UserPref", self, &pref)
+	}
+	muted := func(dir string) string {
+		for _, targ := range pref.Muted {
+			if dir == targ {
+				return "muted"
+			}
+		}
+		return ""
+	}
+	todo := func(cl *codereview.CL) bool {
+		if cl.NeedsReview {
+			return isme(defaultReviewer(cl))
+		} else {
+			return isme(cl.OwnerEmail)
+		}
+	}
+	todoItem := func(item *Item) bool {
+		for _, cl := range item.CLs {
+			if todo(cl) {
+				return true
+			}
+		}
+		return false
+	}
+	todoGroup := func(g *Group) bool {
+		for _, item := range g.Items {
+			if todoItem(item) {
+				return true
+			}
+		}
+		return false
+	}
+
+	tmpl, err := ioutil.ReadFile("template/dash.html")
+	if err != nil {
+		ctxt.Errorf("reading template: %v", err)
+		return
+	}
 	t, err := template.New("main").Funcs(template.FuncMap{
 		"clStatus": clStatus,
-	}).Parse(`<html>
-<head>
-<style>
-</style>
-</head>
-<body>
-<h1>Go 1.3 issues and code reviews</h1>
-<table>
-{{range .}}
-	<tr><td colspan=5><b>{{.Dir}}</b>
-	{{range .Items}}
-		{{if .Bug}}
-			{{with .Bug}}
-				<tr><td>&nbsp; &nbsp; &nbsp; &nbsp; <td><a href="https://code.google.com/p/go/issues/detail?id={{.ID}}">issue {{.ID}}</a><td>{{.Owner}}<td>{{.Summary}}
-			{{end}}
-			{{range .CLs}}
-				<tr><td>&nbsp; &nbsp; &nbsp; &nbsp; <td>&nbsp; &nbsp; <a href="https://codereview.appspot.com/{{.CL}}">CL {{.CL}}</a><td>&nbsp; &nbsp; {{.Owner}}<td>&nbsp; &nbsp; {{.Summary}}
-				<tr><td><td><td><td>&nbsp; &nbsp; &nbsp; &nbsp; <font size=-1>{{clStatus .}}</font>
-			{{end}}
-		{{else}}
-			{{range .CLs}}
-				<tr><td>&nbsp; &nbsp; &nbsp; &nbsp; <td><a href="https://codereview.appspot.com/{{.CL}}">CL {{.CL}}</a><td>{{.Owner}}<td>{{.Summary}}
-				<tr><td><td><td><td>&nbsp; &nbsp; <font size=-1 style="font-family: sans-serif">{{clStatus .}}</font>
-			{{end}}
-		{{end}}
-	{{end}}
-{{end}}
-</table>
-</body>
-	`)
+		"short":    shortEmail,
+		"old":      oldTime,
+		"since":    since,
+		"comma":    comma,
+		"space":    space,
+		"resetAlt": func() string { nrow = 0; return "" },
+		"nextAlt":  func() string { nrow++; return "" },
+		"altColor": func() string {
+			if nrow == 0 {
+				return "first"
+			}
+			return "second"
+		},
+		"isme":            isme,
+		"defaultReviewer": defaultReviewer,
+		"todo":            todo,
+		"todoItem":        todoItem,
+		"todoGroup":       todoGroup,
+		"muted":           muted,
+	}).Parse(string(tmpl))
 	if err != nil {
 		ctxt.Errorf("parsing template: %v", err)
 		return
 	}
 
-	if err := t.Execute(w, groups); err != nil {
+	data := struct {
+		User string
+		Dirs map[string]*Group
+	}{
+		self,
+		groups,
+	}
+
+	if err := t.Execute(w, data); err != nil {
 		ctxt.Errorf("execute: %v", err)
+		fmt.Fprintf(w, "error executing template\n")
 		return
 	}
 }
@@ -178,54 +294,14 @@ var notlgtmRE = regexp.MustCompile(`(?im)^NOT LGTM`)
 
 // LGTM: r / NOT LGTM: rsc / last update: XXX by XXX
 func clStatus(cl *codereview.CL) string {
-	lgtm := make(map[string]bool)
-	for _, m := range cl.Messages {
-		if notlgtmRE.MatchString(m.Text) {
-			lgtm[m.Sender] = false
-		} else if lgtmRE.MatchString(m.Text) {
-			lgtm[m.Sender] = true
-		}
-	}
-	var who []string
-	for key := range lgtm {
-		who = append(who, key)
-	}
-	sort.Strings(who)
-
 	var w bytes.Buffer
-	n := 0
-	for _, k := range who {
-		if lgtm[k] {
-			if n == 0 {
-				fmt.Fprintf(&w, "LGTM: ")
-			} else {
-				fmt.Fprintf(&w, ", ")
-			}
-			fmt.Fprintf(&w, "%s", shorten(k))
-			n++
-		}
-	}
-	n2 := 0
-	for _, k := range who {
-		if x, ok := lgtm[k]; ok && !x {
-			if n2 == 0 {
-				if n > 0 {
-					fmt.Fprintf(&w, " / ")
-				}
-				fmt.Fprintf(&w, "NOT LGTM: ")
-			} else {
-				fmt.Fprintf(&w, ", ")
-			}
-			fmt.Fprintf(&w, "%s", shorten(k))
-			n2++
-		}
-	}
-	if n > 0 || n2 > 0 {
-		fmt.Fprintf(&w, " / ")
-	}
+	fmt.Fprintf(&w, "LGTM: %v / NOT LGTM: %v / R=%v", cl.LGTM, cl.NOTLGTM, cl.PrimaryReviewer)
+	fmt.Fprintf(&w, "delta %d", cl.Delta)
+	fmt.Fprintf(&w, " / repo %s", cl.Repo)
+	fmt.Fprintf(&w, " / dirs %v", cl.Dirs())
 	if len(cl.Messages) > 0 {
 		m := cl.Messages[len(cl.Messages)-1]
-		fmt.Fprintf(&w, "last update: %v by %v [%s]", m.Time.Local().Format("2006-01-02 15:04:05"), shorten(m.Sender), firstLine(m.Text))
+		fmt.Fprintf(&w, " / last update: %v by %v [%s]", m.Time.Local().Format("2006-01-02 15:04:05"), shorten(m.Sender), firstLine(m.Text))
 	}
 
 	return w.String()
@@ -265,17 +341,41 @@ func descDir(desc string) string {
 	return desc
 }
 
+var okDesc = map[string]bool{
+	"all":   true,
+	"build": true,
+}
+
 func itemDir(item *Item) string {
+	for _, cl := range item.CLs {
+		dirs := cl.Dirs()
+		desc := descDir(cl.Summary)
+
+		// Accept description if it is a global prefix like "all".
+		if okDesc[desc] {
+			return desc
+		}
+
+		// Accept description if it matches one of the directories.
+		for _, dir := range dirs {
+			if dir == desc {
+				return dir
+			}
+		}
+
+		// Otherwise use most common directory.
+		if len(dirs) > 0 {
+			return dirs[0]
+		}
+
+		// Otherwise accept description.
+		return desc
+	}
 	if item.Bug != nil {
 		if dir := descDir(item.Bug.Summary); dir != "" {
 			return dir
 		}
 		return "?"
-	}
-	for _, cl := range item.CLs {
-		if dir := descDir(cl.Summary); dir != "" {
-			return dir
-		}
 	}
 	return "?"
 }
@@ -293,39 +393,58 @@ func clBugs(cl *codereview.CL) []int {
 	return out
 }
 
-func showIssueDash(w http.ResponseWriter, req *http.Request) {
-	fmt.Fprintf(w, "<html><pre>\n")
-	const chunk = 500
+func uiOperation(w http.ResponseWriter, req *http.Request) {
 	ctxt := appengine.NewContext(req)
-	q := datastore.NewQuery("Issue").Limit(chunk)
-	//q = q.Filter("Label =", "Release-Go1.3")
-	q = q.Order("Summary")
-
-	if cursor := req.FormValue("cursor"); cursor != "" {
-		cur, err := datastore.DecodeCursor(cursor)
-		if err == nil {
-			q = q.Start(cur)
-		}
+	self := findSelf(ctxt)
+	if self == "" {
+		w.WriteHeader(501)
+		fmt.Fprintf(w, "must be logged in")
+		return
 	}
-
-	fmt.Fprintf(w, "<table>\n")
-	n := 0
-	it := q.Run(ctxt)
-	for {
-		var bug issue.Issue
-		_, err := it.Next(&bug)
+	if req.Method != "POST" {
+		w.WriteHeader(501)
+		fmt.Fprintf(w, "must POST")
+		return
+	}
+	// TODO: XSRF protection
+	switch op := req.FormValue("op"); op {
+	default:
+		w.WriteHeader(501)
+		fmt.Fprintf(w, "invalid verb")
+		return
+	case "mute", "unmute":
+		targ := req.FormValue("dir")
+		if targ == "" {
+			w.WriteHeader(501)
+			fmt.Fprintf(w, "missing dir")
+			return
+		}
+		err := app.Transaction(ctxt, func(ctxt appengine.Context) error {
+			var pref UserPref
+			app.ReadData(ctxt, "UserPref", self, &pref)
+			for i, dir := range pref.Muted {
+				if dir == targ {
+					if op == "unmute" {
+						pref.Muted = append(pref.Muted[:i], pref.Muted[i+1:]...)
+						break
+					}
+					return nil
+				}
+			}
+			if op == "mute" {
+				pref.Muted = append(pref.Muted, targ)
+				sort.Strings(pref.Muted)
+			}
+			return app.WriteData(ctxt, "UserPref", self, &pref)
+		})
 		if err != nil {
-			break
+			w.WriteHeader(501)
+			fmt.Fprintf(w, "unable to update")
+			return
 		}
-		fmt.Fprintf(w, "<tr><td><a href=\"http://golang.org/issue/%v\">%v</a><td>%v<td>%s\n", bug.ID, bug.ID, bug.Owner, bug.Summary)
-		n++
 	}
-	fmt.Fprintf(w, "</table>\n")
+}
 
-	if n == chunk {
-		cur, err := it.Cursor()
-		if err == nil {
-			fmt.Fprintf(w, "<a href=\"/issue?cursor=%s\">more</a>\n", cur)
-		}
-	}
+type UserPref struct {
+	Muted []string
 }

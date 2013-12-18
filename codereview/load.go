@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,18 +84,18 @@ func (j *jsonMessage) toMessage(ctxt appengine.Context) Message {
 }
 
 type jsonPatch struct {
-	Files       []*jsonFile `json:"files"`
-	Created     string      `json:"created"`
-	Owner       string      `json:"owner"`
-	NumComments int         `json:"num_comments"`
-	PatchSet    int64       `json:"patchset"`
-	Issue       int64       `json:"issue"`
-	Message     string      `json:"message"`
-	Modified    string      `json:"modified"`
+	Files       map[string]*jsonFile `json:"files"`
+	Created     string               `json:"created"`
+	Owner       string               `json:"owner"`
+	NumComments int                  `json:"num_comments"`
+	PatchSet    int64                `json:"patchset"`
+	Issue       int64                `json:"issue"`
+	Message     string               `json:"message"`
+	Modified    string               `json:"modified"`
 }
 
 func (j *jsonPatch) toPatch(ctxt appengine.Context) *Patch {
-	return &Patch{
+	p := &Patch{
 		CL:          fmt.Sprint(j.Issue),
 		PatchSet:    fmt.Sprint(j.PatchSet),
 		Created:     parseTime(ctxt, j.Created),
@@ -103,6 +104,15 @@ func (j *jsonPatch) toPatch(ctxt appengine.Context) *Patch {
 		NumComments: j.NumComments,
 		Message:     j.Message,
 	}
+	var names []string
+	for name := range j.Files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p.Files = append(p.Files, j.Files[name].toFile(ctxt, name))
+	}
+	return p
 }
 
 type jsonFile struct {
@@ -116,8 +126,9 @@ type jsonFile struct {
 	IsBinary        bool   `json:"is_binary"`
 }
 
-func (j *jsonFile) toFile(ctxt appengine.Context) File {
+func (j *jsonFile) toFile(ctxt appengine.Context, name string) File {
 	return File{
+		Name:            name,
 		Status:          j.Status,
 		NumChunks:       j.NumChunks,
 		NoBaseFile:      j.NoBaseFile,
@@ -249,10 +260,10 @@ func writeCL(ctxt appengine.Context, cl *CL, mtimeKey, modified string) error {
 		old.OwnerEmail = cl.OwnerEmail
 		old.Created = cl.Created
 		old.Modified = cl.Modified
+		old.MessagesLoaded = cl.MessagesLoaded
 		if cl.MessagesLoaded {
 			old.Messages = cl.Messages
 			old.Submitted = cl.Submitted
-			old.MessagesLoaded = cl.MessagesLoaded
 		}
 		old.Reviewers = cl.Reviewers
 		old.CC = cl.CC
@@ -280,6 +291,10 @@ func init() {
 	app.ScanData("codereview.loadmsg", 5*time.Minute,
 		datastore.NewQuery("CL").Filter("MessagesLoaded =", false),
 		loadmsg)
+
+	app.ScanData("codereview.loadpatch", 5*time.Minute,
+		datastore.NewQuery("CL").Filter("PatchSetsLoaded =", false),
+		loadpatch)
 }
 
 func loadmsg(ctxt appengine.Context, kind, key string) error {
@@ -294,6 +309,71 @@ func loadmsg(ctxt appengine.Context, kind, key string) error {
 	cl.MessagesLoaded = true
 	writeCL(ctxt, cl, "", "")
 	return nil
+}
+
+var (
+	diffRE  = regexp.MustCompile(`diff -r [0-9a-f]+ https?://(?:[^/]*@)?(code.google.com/[pr]/[a-z0-9_.\-]+)`)
+	diffRE2 = regexp.MustCompile(`diff -r [0-9a-f]+ https?://(?:[^/]*@)?([a-z0-9_\-]+)\.googlecode\.com`)
+	diffRE3 = regexp.MustCompile(`diff -r [0-9a-f]+ https?://(?:[^/]*@)?([a-z0-9_\-]+)\.([a-z0-9_\-]+)\.googlecode\.com`)
+)
+
+func loadpatch(ctxt appengine.Context, kind, key string) error {
+	ctxt.Infof("loadpatch %s", key)
+	var cl CL
+	err := app.ReadData(ctxt, "CL", key, &cl)
+	if err != nil {
+		return nil // error already logged
+	}
+
+	if cl.PatchSetsLoaded {
+		return nil
+	}
+
+	var last *Patch
+	for _, id := range cl.PatchSets {
+		var jp jsonPatch
+		err := fetchJSON(ctxt, &jp, fmt.Sprintf("https://codereview.appspot.com/api/%s/%s", cl.CL, id))
+		if err != nil {
+			return nil // already logged
+		}
+		p := jp.toPatch(ctxt)
+		if err := app.WriteData(ctxt, "Patch", fmt.Sprintf("%s/%s", cl.CL, id), p); err != nil {
+			return nil // already logged
+		}
+		last = p
+	}
+
+	err = app.Transaction(ctxt, func(ctxt appengine.Context) error {
+		var old CL
+		if err := app.ReadData(ctxt, "CL", key, &old); err != nil {
+			return err
+		}
+		if len(old.PatchSets) > len(cl.PatchSets) {
+			return fmt.Errorf("more patch sets added")
+		}
+		old.PatchSetsLoaded = true
+		old.FilesModified = last.Modified
+		old.Files = nil
+		old.Delta = 0
+		for _, f := range last.Files {
+			old.Files = append(old.Files, f.Name)
+			old.Delta += int64(f.NumAdded + f.NumRemoved)
+		}
+		if len(old.Files) > 100 {
+			old.Files = old.Files[:100]
+			old.MoreFiles = true
+		}
+		if m := diffRE.FindStringSubmatch(last.Message); m != nil {
+			old.Repo = m[1]
+		} else if m := diffRE2.FindStringSubmatch(last.Message); m != nil {
+			old.Repo = "code.google.com/p/" + m[1]
+		} else if m := diffRE2.FindStringSubmatch(last.Message); m != nil {
+			old.Repo = "code.google.com/p/" + m[2] + "." + m[1]
+		}
+		// NOTE: updateCL will shorten code.google.com/p/go to go.
+		return app.WriteData(ctxt, "CL", key, &old)
+	})
+	return err
 }
 
 func fetchJSON(ctxt appengine.Context, target interface{}, url string) error {
@@ -455,193 +535,3 @@ func status(ctxt appengine.Context) string {
 
 	return "<pre>" + html.EscapeString(w.String()) + "</pre>\n"
 }
-
-/*
-var updatewg = new(sync.WaitGroup)
-
-var reviewMap = map[int]*Review{}
-
-func Update() {
-	for _, to := range []string{"reviewer", "cc"} {
-		updatewg.Add(1)
-		go loadReviews(to, updatewg)
-	}
-	updatewg.Wait()
-
-	for _, r := range allReviews() {
-		reviewMap[r.Issue] = r
-	}
-
-	for _, r := range reviewMap {
-		for _, patchID := range r.PatchSets {
-			updatewg.Add(1)
-			go func(r *Review, id int) {
-				defer updatewg.Done()
-				if err := r.LoadPatchMeta(id); err != nil {
-					log.Fatal(err)
-				}
-			}(r, patchID)
-		}
-	}
-	updatewg.Wait()
-}
-
-func loadReviews(to string, wg *sync.WaitGroup) {
-	defer wg.Done()
-	cursor := ""
-	for {
-		url := urlWithParams(queryTmpl, map[string]string{
-			"CC_OR_REVIEWER": to,
-			"CURSOR":         cursor,
-			"LIMIT":          fmt.Sprint(itemsPerPage),
-		})
-		log.Printf("Fetching %s", url)
-		res, err := http.Get(url)
-		if err != nil {
-			log.Fatal(err)
-		}
-		var reviews []*Review
-		reviews, cursor, err = ParseReviews(res.Body)
-		if err != nil {
-			log.Fatal(err)
-		}
-		var nfetch, nold int
-		for _, r := range reviews {
-			old := reviewMap[r.Issue]
-			if old != nil && old.Modified == r.Modified {
-				nold++
-			} else {
-				nfetch++
-				wg.Add(1)
-				go updateReview(r, wg)
-			}
-		}
-		log.Printf("for cursor %q, Got %d reviews (%d updated, %d old)", cursor, len(reviews), nfetch, nold)
-		res.Body.Close()
-		if cursor == "" || len(reviews) == 0 || nold > 0 {
-			break
-		}
-	}
-}
-
-var httpGate = make(chan bool, 25)
-
-func gate() (ungate func()) {
-	httpGate <- true
-	return func() {
-		<-httpGate
-	}
-}
-
-// updateReview checks to see if r (which lacks comments) has a higher
-// modification time than the version we have on disk and if necessary
-// fetches the full (with comments) version of r and puts it on disk.
-func updateReview(r *Review, wg *sync.WaitGroup) {
-	defer wg.Done()
-	dr, err := loadDiskFullReview(r.Issue)
-	if err == nil && dr.Modified == r.Modified {
-		// Nothing to do.
-		return
-	}
-	if err != nil && !os.IsNotExist(err) {
-		log.Fatalf("Error loading issue %d: %v", r.Issue, err)
-	}
-
-	dstFile := issueDiskPath(r.Issue)
-	dir := filepath.Dir(dstFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Fatal(err)
-	}
-
-	defer gate()()
-
-	url := urlWithParams(reviewTmpl, map[string]string{
-		"CL": fmt.Sprint(r.Issue),
-	})
-	log.Printf("Fetching %s", url)
-	res, err := http.Get(url)
-	if err != nil || res.StatusCode != 200 {
-		log.Fatalf("Error fetching %s: %+v, %v", url, res, err)
-	}
-	defer res.Body.Close()
-
-	if err := writeReadableJSON(dstFile, res.Body); err != nil {
-		log.Fatal(err)
-	}
-}
-
-type Message struct {
-	Sender string `json:"sender"`
-	Text   string `json:"text"`
-	Date   string `json:"date"` // "2012-04-07 00:51:58.602055"
-}
-
-type byMessageDate []*Message
-
-func (s byMessageDate) Len() int           { return len(s) }
-func (s byMessageDate) Less(i, j int) bool { return s[i].Date < s[j].Date }
-func (s byMessageDate) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
-// Time unmarshals a time in rietveld's format.
-type Time time.Time
-
-func (t *Time) UnmarshalJSON(b []byte) error {
-	if len(b) < 2 || b[0] != '"' || b[len(b)-1] != '"' {
-		return fmt.Errorf("types: failed to unmarshal non-string value %q as an RFC 3339 time")
-	}
-	// TODO: pic
-	tm, err := time.Parse("2006-01-02 15:04:05", string(b[1:len(b)-1]))
-	if err != nil {
-		return err
-	}
-	*t = Time(tm)
-	return nil
-}
-
-func (t Time) String() string { return time.Time(t).String() }
-
-type Review struct {
-	Issue      int        `json:"issue"`
-	Desc       string     `json:"description"`
-	OwnerEmail string     `json:"owner_email"`
-	Owner      string     `json:"owner"`
-	Created    Time       `json:"created"`
-	Modified   string     `json:"modified"` // just a string; more reliable to do string equality tests on it
-	Messages   []*Message `json:"messages"`
-	Reviewers  []string   `json:"reviewers"`
-	CC         []string   `json:"cc"`
-	Closed     bool       `json:"closed"`
-	PatchSets  []int      `json:"patchsets"`
-}
-
-// Reviewer returns the email address of an explicit reviewer, if any, else
-// returns the empty string.
-func (r *Review) Reviewer() string {
-	for _, who := range r.Reviewers {
-		if strings.HasSuffix(who, "@googlegroups.com") {
-			continue
-		}
-		return who
-	}
-	return ""
-}
-
-func (r *Review) LoadPatchMeta(patch int) error {
-	path := patchDiskPatch(r.Issue, patch)
-	if fi, err := os.Stat(path); err == nil && fi.Size() != 0 {
-		return nil
-	}
-
-	defer gate()()
-
-	url := fmt.Sprintf("https://codereview.appspot.com/api/%d/%d", r.Issue, patch)
-	log.Printf("Fetching patch %s", url)
-	res, err := http.Get(url)
-	if err != nil || res.StatusCode != 200 {
-		return fmt.Errorf("Error fetching %s (issue %d, patch %d): %+v, %v", url, r.Issue, patch, res, err)
-	}
-	defer res.Body.Close()
-
-	return writeReadableJSON(path, res.Body)
-}
-*/
