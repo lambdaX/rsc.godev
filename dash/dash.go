@@ -108,6 +108,14 @@ func findSelf(ctxt appengine.Context) string {
 	return self
 }
 
+func defaultReviewer(cl *codereview.CL) string {
+	if cl.PrimaryReviewer == "" {
+		return "golang-dev"
+	}
+	return cl.PrimaryReviewer
+}
+
+
 func showDash(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Path == "/login" {
 		http.Redirect(w, req, "/", 302)
@@ -199,12 +207,6 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 	nrow := 0
 	self := findSelf(ctxt)
 	isme := func(s string) bool { return s == self || s == "golang-dev" }
-	defaultReviewer := func(cl *codereview.CL) string {
-		if cl.PrimaryReviewer == "" {
-			return "golang-dev"
-		}
-		return cl.PrimaryReviewer
-	}
 
 	var pref UserPref
 	if self != "" {
@@ -268,6 +270,7 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		"todoItem":        todoItem,
 		"todoGroup":       todoGroup,
 		"muted":           muted,
+		"replace": strings.Replace,
 	}).Parse(string(tmpl))
 	if err != nil {
 		ctxt.Errorf("parsing template: %v", err)
@@ -442,6 +445,32 @@ func uiOperation(w http.ResponseWriter, req *http.Request) {
 			fmt.Fprintf(w, "unable to update")
 			return
 		}
+	
+	case "reviewer":
+		clnum := req.FormValue("cl")
+		who := req.FormValue("reviewer")
+		switch who {
+		case "close", "golang-dev":
+			// ok
+		default:
+			who = codereview.ExpandReviewer(who)
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if who == "" {
+			fmt.Fprintf(w, "ERROR: unknown reviewer")
+			return
+		}
+		if err := codereview.SetReviewer(ctxt, clnum, who); err != nil {
+			fmt.Fprintf(w, "ERROR: setting reviewer: %v", err)
+			return
+		}
+		var cl codereview.CL
+		if err := app.ReadData(ctxt, "CL", clnum, &cl); err != nil {
+			fmt.Fprintf(w, "ERROR: refreshing CL: %v", err)
+			return
+		}
+		fmt.Fprintf(w, "%s", shortEmail(defaultReviewer(&cl)))
+		return
 	}
 }
 

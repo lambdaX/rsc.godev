@@ -6,6 +6,10 @@ package app
 
 import (
 	"encoding/json"
+	"net/http"
+	"fmt"
+	"bytes"
+	"html"
 
 	"appengine"
 	"appengine/memcache"
@@ -88,4 +92,61 @@ func DeleteMeta(ctxt appengine.Context, key string) error {
 	err := DeleteData(ctxt, "Meta", key)
 	memcache.Delete(ctxt, "app.Meta."+key)
 	return err
+}
+
+func init() {
+	http.HandleFunc("/admin/app/metaedit", metaedit)
+}
+
+var editForm = `<html>
+<h1>metadata edit</h1>
+
+<form method="post">
+Key: <input type="text" name="key" value="%s">
+<br>
+Value: <textarea name="value" columns=80 rows=25>%s</textarea>
+<br>
+<input type="submit" name="op" value="Read">
+<input type="submit" name="op" value="Write">
+<input type="submit" name="op" value="Delete">
+</form>
+`
+
+func metaedit(w http.ResponseWriter, req *http.Request) {
+	// TODO: XSRF
+
+	ctxt := appengine.NewContext(req)
+	key := req.FormValue("key")
+	op := req.FormValue("op")
+	var value json.RawMessage
+	ReadMeta(ctxt, key, &value)
+	
+	if req.Method != "GET" {
+		switch op {
+		case "Read":
+			// do nothing
+		case "Write":
+			value = json.RawMessage([]byte(req.FormValue("value")))
+			if err := WriteMeta(ctxt, key, &value); err != nil {
+				fmt.Fprintf(w, "failed to write: %v\n", err)
+				return
+			}
+		case "Delete":
+			value = nil
+			if err := DeleteMeta(ctxt, key); err != nil {
+				fmt.Fprintf(w, "failed to delete: %v\n", err)
+				return
+			}
+		}
+	}
+	
+	var buf bytes.Buffer
+	if len(value) > 0 {
+		if err := json.Indent(&buf, value, "", "\t"); err != nil {
+			buf.Reset()
+			fmt.Fprintf(&buf, "malformed JSON")
+		}
+	}
+	
+	fmt.Fprintf(w, editForm, html.EscapeString(key), html.EscapeString(buf.String()))
 }

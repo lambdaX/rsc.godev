@@ -261,6 +261,10 @@ func isReviewer(email string) string {
 	return ""
 }
 
+func ExpandReviewer(short string) string {
+	return expandReviewer(short)
+}
+
 func expandReviewer(short string) string {
 	if strings.Contains(short, "@") {
 		return isReviewer(short)
@@ -288,6 +292,7 @@ func (cl *CL) parseMessages() {
 		firstResponder   = ""
 		explicitReviewer = ""
 	)
+
 	cl.Mailed = false
 	cl.Submitted = false
 	for _, m := range cl.Messages {
@@ -310,8 +315,8 @@ func (cl *CL) parseMessages() {
 			cl.Submitted = true
 		}
 		if m := reviewerRE.FindStringSubmatch(m.Text); m != nil {
-			if m[1] == "close" {
-				explicitReviewer = "close"
+			if m[1] == "close" || m[1] == "golang-dev" {
+				explicitReviewer = m[1]
 			} else if x := expandReviewer(m[1]); x != "" {
 				explicitReviewer = x
 			}
@@ -334,6 +339,10 @@ func (cl *CL) parseMessages() {
 		cl.PrimaryReviewer = initialReviewer
 	case firstResponder != "":
 		cl.PrimaryReviewer = firstResponder
+	}
+	
+	if cl.PrimaryReviewer == "golang-dev" {
+		cl.PrimaryReviewer = ""
 	}
 
 	// Now that we know who the primary reviewer is,

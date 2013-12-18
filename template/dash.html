@@ -1,0 +1,61 @@
+<html>
+<head>
+<link rel="stylesheet" href="/dash.css" />
+<script src="//ajax.googleapis.com/ajax/libs/jquery/1.8.2/jquery.min.js"></script>
+<script src="/dash.js"></script>
+</head>
+<body>
+<h1>Go 1.3 issues and code reviews</h1>
+<div class="loginbar">
+{{if .User}}
+logged in as {{.User}}
+| <a href="#" id="muteunmute">show muted directories</a>
+| <a href="#" id="actionnoaction">show only issues/CLs that need me</a>
+{{else}}
+<a href="/login">log in for personalization</a>
+{{end}}
+</div>
+
+<table>
+{{range $rawindex, $item := .Dirs}}
+	{{$index := replace $rawindex "\x7F" "" -1}}
+	<tr class="dir dir-{{$index}} {{muted $index}} {{if todoGroup .}}todo{{end}}">
+		<td colspan=5>
+			<b>{{.Dir}}</b> <span class="verb"><a class="dir-{{$index}} mute" href="#">{{if muted $index}}unmute{{else}}mute{{end}}</a></span>
+	{{resetAlt}}
+	{{range $Item := .Items}}
+		{{with .Bug}}
+			<tr class="dir-{{$index}} {{altColor}} {{muted $index}} {{if todoItem $Item}}todo{{end}}">
+			<td class="highlight">
+			<td class="issue id"><a target="_blank" href="https://code.google.com/p/go/issues/detail?id={{.ID}}">issue {{.ID}}</a>
+			{{with (index .Comment 0).Author}}
+			<td class="author {{if isme .}}self author-self{{end}}">{{. | short}}
+			{{end}}
+			<td class="reviewer {{if isme .Owner}}self reviewer-self{{end}}">{{.Owner | short}}
+			<td class="summary">{{.Summary}}
+		{{end}}
+		{{range .CLs}}
+			<tr class="dir-{{$index}} {{if $Item.Bug}}nest{{else}}{{altColor}}{{end}} {{if .Modified | old}}old{{end}} {{muted $index}} {{if todoItem $Item}}todo{{end}}">
+			<td class="highlight {{if todo .}}todo{{end}}">
+			<td class="codereview id"><a target="_blank" href="https://codereview.appspot.com/{{.CL}}">CL {{.CL}}</a>
+			<td class="author {{if .NeedsReview}}{{else}}needswork{{end}} {{if isme .OwnerEmail}}self author-self{{end}}">{{.OwnerEmail | short}}
+			<td class="reviewer {{if .NeedsReview}}needsreview{{end}} {{if defaultReviewer . | isme}}self reviewer-self{{end}}"><span id="reviewer-{{.CL}}">{{defaultReviewer . | short}}</span> 
+				{{if $.User}}
+					<span class="assignreviewer">
+						<a class="assignreviewer" id="assign-{{.CL}}" href="#">edit</a>
+						<span id="err-{{.CL}}"></span>
+					</span>
+				{{end}}
+			<td class="summary">{{.Summary}}
+				<span class="lgtmornot">{{if .NOTLGTM}}<span class="notlgtm">(&ndash;{{.NOTLGTM | short | comma}}</span>{{if .LGTM}}; <span class="lgtm">+{{.LGTM | short | comma}}</span>{{end}}<span class="notlgtm">)</span>{{else}}{{if .LGTM}}<span class="lgtm">(+{{.LGTM | short | comma}})</span>{{end}}{{end}}</span><br>
+				<div class="extra">
+				<span class="summary"><span class="age {{if .Modified | old}}old{{end}}">last updated {{.Modified | since}}</span>{{if .Delta}}<span class="delta">, {{.Delta}} lines</span>{{end}}, {{if .NeedsReview}}<span class="needsreview">waiting for reviewer</span>{{else}}<span class="needswork">waiting for author</span>{{end}}</span><br>
+				<span class="files">{{.Files | space}}</span>
+				</div>
+		{{end}}
+		{{nextAlt}}
+	{{end}}
+{{end}}
+</table>
+</body>
+</html>

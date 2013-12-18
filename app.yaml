@@ -2,7 +2,7 @@ runtime: go
 api_version: go1
 
 application: go-dev
-version: 1
+version: 2
 
 handlers:
 - url: /admin(/.*)?
