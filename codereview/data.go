@@ -315,8 +315,10 @@ func (cl *CL) parseMessages() {
 			cl.Submitted = true
 		}
 		if m := reviewerRE.FindStringSubmatch(m.Text); m != nil {
-			if m[1] == "close" || m[1] == "golang-dev" {
-				explicitReviewer = m[1]
+			if m[1] == "close" {
+				explicitReviewer = "close"
+			} else if m[1] == "golang-dev" || m[1] == "golang-codereviews" {
+				explicitReviewer = "golang-dev"
 			} else if x := expandReviewer(m[1]); x != "" {
 				explicitReviewer = x
 			}

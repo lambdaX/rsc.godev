@@ -1,18 +1,79 @@
-var muting = true;
+var mode = "all"
+
+function readURL() {
+	mode = window.location.hash
+	if(mode.match(/\+muted$/)) {
+		$("#showmute").attr("checked","checked");
+		mode = mode.replace(/\+muted$/, "");
+	}
+}
+
+function show(newmode) {
+	mode = newmode
+	redraw()
+}
+
+function redraw() {
+	// Invariant: a tr containing a td with mine and todo classes itself has class todo.
+	$("tr.todo").removeClass("todo");
+	$("td.mine.todo").parent().addClass("todo");
+
+	// Start with all items hidden.
+	$("tr.item").addClass("hidden");
+	$("tbody.dir").addClass("hidden");
+
+	// Unhide the rows we want to show.
+	var show;
+	var showmute = $("#showmute").prop('checked');
+	if(mode == "mine") {
+		$("td.mine").parent().removeClass("hidden");
+	} else if(mode == "todo") {
+		$("td.mine.todo").parent().removeClass("hidden");
+	} else if(mode == "unassigned") {
+		var show = $("td.unassigned").parent();
+		if(!showmute)
+			show = show.not("tbody.muted tr.item");
+		show.removeClass("hidden");
+	} else {
+		mode = "all"
+		if(showmute) {
+			$("tr.item").removeClass("hidden");
+		} else {
+			$("tbody:not(.muted) tr.item").removeClass("hidden")
+			$("td.mine").parent().removeClass("hidden")
+		}	
+	}
+	
+	// Unhide the tbody containing the items we want to show.
+	// Unhiding a tbody will unhide its directory row.
+	$("tr.item:not(.hidden)").parent().removeClass("hidden");
+
+	// Make the current mode look less like a link.
+	$("a.showbar").removeClass("showing");
+	$("#show-"+mode).addClass("showing");
+
+	// Update window hash for bookmarking.
+	var hash = mode
+	if(showmute) {
+		hash += "+muted"
+	}
+	window.location.hash = hash
+}
 
 function mute(ev, dir) {
 	var dirclass = "dir-" + dir.replace(/\//g, "\\/").replace(/\./g, "\\.");
 	
 	var outer = $(ev.delegateTarget);
-	var muted = outer.text() == "mute";
+	var muting = outer.text() == "mute";
 	var op = "";
-	if(muted) {
+	if(muting) {
 		outer.text("muting...");
 		op = "mute";
 	} else {
 		outer.text("unmuting...");
 		op = "unmute";
 	}
+	console.log("Mute: " + dir)
 	$.ajax({
 		"type": "POST",
 		"url": "/uiop",
@@ -22,16 +83,13 @@ function mute(ev, dir) {
 		},
 		"success": function() {
 			if(op == "mute") {
-				$("tr." + dirclass).addClass("muted");
-				if(muting) {
-					$("tr."+dirclass).addClass("muting");
-				}
+				$("tbody." + dirclass).addClass("muted");
 				outer.text("unmute");
 			} else {
-				$("tr." + dirclass).removeClass("muted");
-				$("tr."+dirclass).removeClass("muting");
+				$("tbody." + dirclass).removeClass("muted");
 				outer.text("mute");
 			}
+			redraw();
 		},
 		"error": function(xhr, status) {
 			outer.text("failed: " + status)	
@@ -66,6 +124,7 @@ function setreviewer(a, rev) {
 }
 
 $(document).ready(function() {
+	// Define handler for mute links.
 	$("a.mute").click(function(ev) {
 		ev.preventDefault();
 		var classes = $(ev.delegateTarget).attr("class").split(/\s+/);
@@ -77,35 +136,7 @@ $(document).ready(function() {
 		}
 	})
 	
-	$("tr.muted").addClass("muting");
-	
-	$("#muteunmute").click(function(ev) {
-		ev.preventDefault();
-		muting = !muting;
-		var a = $(ev.delegateTarget)
-		if(muting) {
-			a.text("show muted directories")
-			$("tr.muted").addClass("muting");
-		} else {
-			a.text("hide muted directories")
-			$("tr.muted").removeClass("muting");
-		}
-	})
-	
-	var action = false;
-	$("#actionnoaction").click(function(ev) {
-		ev.preventDefault();
-		action = !action;
-		var a = $(ev.delegateTarget)
-		if(action) {
-			a.text("show all issues/CLs")
-			$("tr:not(.todo)").addClass("todohide");			
-		} else {
-			a.text("show my todo issues/CLs")
-			$("tr:not(.todo)").removeClass("todohide");
-		}
-	})
-	
+	// Define handler for edit-reviewer links.
 	$("a.assignreviewer").click(function(ev) {
 		ev.preventDefault();
 		var a = $(ev.delegateTarget);
@@ -123,4 +154,11 @@ $(document).ready(function() {
 			setreviewer(a, rev);
 		}
 	})
+
+	// Update mode from URL in browser and redraw.
+	readURL();
+	redraw();
+
+	// Redraw any time the muting checkbox changes.
+	$("#showmute").change(redraw);
 })

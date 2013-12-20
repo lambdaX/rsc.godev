@@ -5,7 +5,6 @@
 package dash
 
 import (
-	"bytes"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -63,7 +62,23 @@ func dirKey(s string) string {
 	return s
 }
 
-func shortEmail(s interface{}) interface{} {
+// display holds state needed to compute the displayed HTML.
+// The methods here are turned into functions for the template to call.
+// Not all methods need the display state; being methods just keeps
+// them all in one place.
+type display struct {
+	email string
+	pref UserPref
+}
+
+// UserPref holds user preferences; stored in the datastore under email address.
+type UserPref struct {
+	Muted []string
+}
+
+// short returns a shortened email address by removing @domain.
+// Input can be string or []string; output is same.
+func (d *display) short(s interface{}) interface{} {
 	switch s := s.(type) {
 	case string:
 		if i := strings.Index(s, "@"); i >= 0 {
@@ -73,7 +88,7 @@ func shortEmail(s interface{}) interface{} {
 	case []string:
 		v := make([]string, len(s))
 		for i, t := range s {
-			v[i] = shortEmail(t).(string)
+			v[i] = d.short(t).(string)
 		}
 		return v
 	default:
@@ -82,37 +97,84 @@ func shortEmail(s interface{}) interface{} {
 	return s
 }
 
-func oldTime(t time.Time) bool {
-	return time.Since(t) > 7*24*time.Hour
+// css returns name if cond is true; otherwise it returns the empty string.
+// It is intended for use in generating css class names (or not).
+func (d *display) css(name string, cond bool) string {
+	if cond {
+		return name
+	}
+	return ""
 }
 
-func comma(s []string) string {
-	return strings.Join(s, ",")
+// old returns css class "old" t is too long ago.
+func (d *display) old(t time.Time) string {
+	return d.css("old", time.Since(t) > 7*24*time.Hour)
 }
 
-func space(s []string) string {
-	return strings.Join(s, " ")
+// join is like strings.Join but takes arguments in the reverse order,
+// enabling {{list | join ","}}.
+func (d *display) join(sep string, list []string) string {
+	return strings.Join(list, sep)
 }
 
-func since(t time.Time) string {
+// since returns the elapsed time since t as a number of days.
+func (d *display) since(t time.Time) string {
+	// NOTE: Considered changing the unit (hours, days, weeks)
+	// but that made it harder to scan through the table.
+	// If it's always days, that's one less thing you have to read.
+	// Otherwise 1 week might be misread as worse than 6 hours.
 	dt := time.Since(t)
 	return fmt.Sprintf("%.1f days ago", float64(dt)/float64(24*time.Hour))
 }
 
-func findSelf(ctxt appengine.Context) string {
-	self := ""
-	u := user.Current(ctxt)
-	if u != nil {
-		self = codereview.IsReviewer(u.Email)
-	}
-	return self
-}
-
-func defaultReviewer(cl *codereview.CL) string {
+// reviewer returns the reviewer for a CL:
+// the actual reviewer if there is one, or else "golang-dev".
+func (d *display) reviewer(cl *codereview.CL) string {
 	if cl.PrimaryReviewer == "" {
 		return "golang-dev"
 	}
 	return cl.PrimaryReviewer
+}
+
+// second returns the css class "second" if the index is non-zero
+// (so really "second" here means "not first").
+func (d *display) second(index int) string {
+	return d.css("second", index > 0)
+}
+
+// mine returns the css class "mine" if the email address is the logged-in user.
+// It also returns "unassigned" for the unassigned reviewer "golang-dev"
+// (see reviewer above).
+func (d *display) mine(email string) string {
+	if email == d.email {
+		return "mine"
+	}
+	if email == "golang-dev" {
+		return "unassigned"
+	}
+	return ""
+}
+
+// muted returns the css class "muted" if the directory is muted.
+func (d *display) muted(dir string) string {
+	for _, m := range d.pref.Muted {
+		if m == dir {
+			return "muted"
+		}
+	}
+	return ""
+}
+
+func findEmail(ctxt appengine.Context) string {
+	self := ""
+	u := user.Current(ctxt)
+	if u != nil {
+		self = codereview.IsReviewer(u.Email)
+		if self == "" {
+			self = u.Email
+		}
+	}
+	return self
 }
 
 
@@ -140,17 +202,6 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprintf(w, "loading CLs failed\n")
 		return
 	}
-
-	// There are some CLs in datastore that are not active but
-	// have not been updated to DV 6 yet and still say Active=true
-	// in the datastore index; filter those out.
-	out := cls[:0]
-	for _, cl := range cls {
-		if cl.Active {
-			out = append(out, cl)
-		}
-	}
-	cls = out
 
 	var bugs []*issue.Issue
 	_, err = datastore.NewQuery("Issue").
@@ -201,17 +252,20 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 	for _, g := range groups {
 		sort.Sort(itemsBySummary(g.Items))
 	}
-
-	// TODO: Rewrite.
+	
+	// Load information about logged-in user.
+	var d display
+	d.email = findEmail(ctxt)
+	if d.email != "" {
+		app.ReadData(ctxt, "UserPref", d.email, &d.pref)
+	}
+	
+	/*
 
 	nrow := 0
-	self := findSelf(ctxt)
+	self := findEmail(ctxt)
 	isme := func(s string) bool { return s == self || s == "golang-dev" }
 
-	var pref UserPref
-	if self != "" {
-		app.ReadData(ctxt, "UserPref", self, &pref)
-	}
 	muted := func(dir string) string {
 		for _, targ := range pref.Muted {
 			if dir == targ {
@@ -243,6 +297,7 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		}
 		return false
 	}
+	*/
 
 	tmpl, err := ioutil.ReadFile("template/dash.html")
 	if err != nil {
@@ -250,27 +305,16 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	t, err := template.New("main").Funcs(template.FuncMap{
-		"clStatus": clStatus,
-		"short":    shortEmail,
-		"old":      oldTime,
-		"since":    since,
-		"comma":    comma,
-		"space":    space,
-		"resetAlt": func() string { nrow = 0; return "" },
-		"nextAlt":  func() string { nrow++; return "" },
-		"altColor": func() string {
-			if nrow == 0 {
-				return "first"
-			}
-			return "second"
-		},
-		"isme":            isme,
-		"defaultReviewer": defaultReviewer,
-		"todo":            todo,
-		"todoItem":        todoItem,
-		"todoGroup":       todoGroup,
-		"muted":           muted,
+		"css": d.css,
+		"join": d.join,
+		"mine": d.mine,
+		"muted": d.muted,
+		"old": d.old,
 		"replace": strings.Replace,
+		"reviewer": d.reviewer,
+		"second": d.second,
+		"short": d.short,
+		"since": d.since,
 	}).Parse(string(tmpl))
 	if err != nil {
 		ctxt.Errorf("parsing template: %v", err)
@@ -281,7 +325,7 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		User string
 		Dirs map[string]*Group
 	}{
-		self,
+		d.email,
 		groups,
 	}
 
@@ -290,42 +334,6 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprintf(w, "error executing template\n")
 		return
 	}
-}
-
-var lgtmRE = regexp.MustCompile(`(?im)^LGTM`)
-var notlgtmRE = regexp.MustCompile(`(?im)^NOT LGTM`)
-
-// LGTM: r / NOT LGTM: rsc / last update: XXX by XXX
-func clStatus(cl *codereview.CL) string {
-	var w bytes.Buffer
-	fmt.Fprintf(&w, "LGTM: %v / NOT LGTM: %v / R=%v", cl.LGTM, cl.NOTLGTM, cl.PrimaryReviewer)
-	fmt.Fprintf(&w, "delta %d", cl.Delta)
-	fmt.Fprintf(&w, " / repo %s", cl.Repo)
-	fmt.Fprintf(&w, " / dirs %v", cl.Dirs())
-	if len(cl.Messages) > 0 {
-		m := cl.Messages[len(cl.Messages)-1]
-		fmt.Fprintf(&w, " / last update: %v by %v [%s]", m.Time.Local().Format("2006-01-02 15:04:05"), shorten(m.Sender), firstLine(m.Text))
-	}
-
-	return w.String()
-}
-
-func shorten(email string) string {
-	if i := strings.Index(email, "@"); i >= 0 {
-		email = email[:i]
-	}
-	return email
-}
-
-func firstLine(t string) string {
-	i := strings.Index(t, "\n")
-	if i >= 0 {
-		t = t[:i]
-	}
-	if len(t) > 50 {
-		t = t[:50] + "..."
-	}
-	return t
 }
 
 func descDir(desc string) string {
@@ -398,8 +406,9 @@ func clBugs(cl *codereview.CL) []int {
 
 func uiOperation(w http.ResponseWriter, req *http.Request) {
 	ctxt := appengine.NewContext(req)
-	self := findSelf(ctxt)
-	if self == "" {
+	email := findEmail(ctxt)
+	d := display{email: email}
+	if d.email == "" {
 		w.WriteHeader(501)
 		fmt.Fprintf(w, "must be logged in")
 		return
@@ -424,7 +433,7 @@ func uiOperation(w http.ResponseWriter, req *http.Request) {
 		}
 		err := app.Transaction(ctxt, func(ctxt appengine.Context) error {
 			var pref UserPref
-			app.ReadData(ctxt, "UserPref", self, &pref)
+			app.ReadData(ctxt, "UserPref", d.email, &pref)
 			for i, dir := range pref.Muted {
 				if dir == targ {
 					if op == "unmute" {
@@ -438,7 +447,7 @@ func uiOperation(w http.ResponseWriter, req *http.Request) {
 				pref.Muted = append(pref.Muted, targ)
 				sort.Strings(pref.Muted)
 			}
-			return app.WriteData(ctxt, "UserPref", self, &pref)
+			return app.WriteData(ctxt, "UserPref", d.email, &pref)
 		})
 		if err != nil {
 			w.WriteHeader(501)
@@ -469,11 +478,8 @@ func uiOperation(w http.ResponseWriter, req *http.Request) {
 			fmt.Fprintf(w, "ERROR: refreshing CL: %v", err)
 			return
 		}
-		fmt.Fprintf(w, "%s", shortEmail(defaultReviewer(&cl)))
+		fmt.Fprintf(w, "%s", d.short(d.reviewer(&cl)))
 		return
 	}
 }
 
-type UserPref struct {
-	Muted []string
-}

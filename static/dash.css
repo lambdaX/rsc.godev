@@ -1,17 +1,27 @@
+h1 {
+	font-size: 1.5em;
+	margin-top: 0.1em;
+	margin-bottom: 0.1em;
+}
+.loginbar {
+	float: right;
+}
+a.showing {
+	color: black;
+	text-decoration: none;
+	font-weight: bold;
+}
 table {
 	border-spacing: 0;
 	width: 100%;
 }
-tr.muting {
+tbody.hidden tr.dir {
 	display: none;
 }
-tr.todohide {
+tr.hidden {
 	display: none;
 }
-tr.first {
-	background-color: #fff;
-}
-tr.second td {
+tr.item td {
 	border-top: 1px solid #ccc;
 }
 td {
@@ -30,7 +40,7 @@ tr.dir td {
 td.id {
 	width: 7em;
 }
-td.todo {
+tr.todo td.highlight {
 	border-right: 5px solid blue;
 }
 td.author {
@@ -39,15 +49,15 @@ td.author {
 td.reviewer {
 	width: 9em;
 }
-div.loginbar {
+div.loginbar, span.howto, span.lgtmornot, span.summary, span.files {
 	font-family: sans-serif;
 	font-size: 80%;
+}
+div.loginbar {
 	padding-bottom: 1em;
 }
-span.lgtmornot {
-	font-family: sans-serif;
+span.lgtmornot, span.summary, span.files {
 	color: #777;
-	font-size: 80%;
 }
 span.lgtm {
 	color: #0c8;
@@ -57,12 +67,7 @@ span.notlgtm {
 	color: #e00;
 	font-weight: bold;
 }
-span.summary {
-	font-family: sans-serif;
-	color: #777;
-	font-size: 80%;
-}
-span.old {
+tr.old span.age {
 	font-weight: bold;
 	font-style: italic;
 	color: #e00;
@@ -76,19 +81,11 @@ a.big {
 	font-size: 150%;
 	border: 1px solid blue;
 }
-td.self {
+td.mine {
 	font-weight: bold;
 }
 tr.nest td.id {
 	padding-left: 1em;
-}
-tr.todohide {
-	display: none;
-}
-span.files {
-	font-family: sans-serif;
-	color: #777;
-	font-size: 80%;
 }
 div.extra {
 	margin-left: 1em;

@@ -172,6 +172,7 @@ func load(ctxt appengine.Context) error {
 	// Stop when we've run for 5 minutes and ask to be rescheduled.
 	deadline := time.Now().Add(5 * time.Minute)
 
+	for _, group := range []string{"golang-dev", "golang-codereviews"} {
 	for _, reviewerOrCC := range []string{"reviewer", "cc"} {
 		// The stored mtime is the most recent modification time we've seen.
 		// We ask for all changes since then.
@@ -198,6 +199,7 @@ func load(ctxt appengine.Context) error {
 			}
 			err := fetchJSON(ctxt, &q, urlWithParams(queryTmpl, map[string]string{
 				"ReviewerOrCC":  reviewerOrCC,
+				"Group": group,
 				"ModifiedAfter": mtime,
 				"Order":         "modified",
 				"Cursor":        cursor,
@@ -230,6 +232,7 @@ func load(ctxt appengine.Context) error {
 				return app.ErrMoreCron
 			}
 		}
+	}
 	}
 
 	ctxt.Infof("all done")
@@ -404,7 +407,7 @@ const (
 	timeFormat = "2006-01-02 15:04:05"
 
 	// closed=1 means "unknown"
-	queryTmpl = "https://codereview.appspot.com/search?closed=1&owner=&{{ReviewerOrCC}}=golang-dev@googlegroups.com&repo_guid=&base=&private=1&created_before=&created_after=&modified_before=&modified_after={{ModifiedAfter}}&order={{Order}}&format=json&keys_only=False&with_messages=False&cursor={{Cursor}}&limit={{Limit}}"
+	queryTmpl = "https://codereview.appspot.com/search?closed=1&owner=&{{ReviewerOrCC}}={{Group}}@googlegroups.com&repo_guid=&base=&private=1&created_before=&created_after=&modified_before=&modified_after={{ModifiedAfter}}&order={{Order}}&format=json&keys_only=False&with_messages=False&cursor={{Cursor}}&limit={{Limit}}"
 
 	// JSON with the text of messages. e.g.
 	// https://codereview.appspot.com/api/6454085?messages=true
