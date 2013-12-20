@@ -1,7 +1,7 @@
 var mode = "all"
 
 function readURL() {
-	mode = window.location.hash
+	mode = window.location.hash.substr(1)
 	if(mode.match(/\+muted$/)) {
 		$("#showmute").attr("checked","checked");
 		mode = mode.replace(/\+muted$/, "");
