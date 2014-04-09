@@ -304,9 +304,9 @@ func init() {
 		datastore.NewQuery("CL").Filter("PatchSetsLoaded =", false),
 		loadpatch)
 
-//	app.ScanData("codereview.mail", 1*time.Minute,
-//		datastore.NewQuery("CL").Filter("NeedMailIssue !=", ""),
-//		mailissue)
+	app.ScanData("codereview.mail", 15*time.Minute,
+		datastore.NewQuery("CL").Filter("Active =", true).Filter("NeedMailIssue >", ""),
+		mailissue)
 }
 
 func loadmsg(ctxt appengine.Context, kind, key string) error {
@@ -393,6 +393,53 @@ func loadpatch(ctxt appengine.Context, kind, key string) error {
 		// NOTE: updateCL will shorten code.google.com/p/go to go.
 		return app.WriteData(ctxt, "CL", key, &old)
 	})
+	return err
+}
+
+func init() {
+	http.HandleFunc("/admin/codereview/mailissue", testmailissue)
+}
+
+func testmailissue(w http.ResponseWriter, req *http.Request) {
+	err := mailissue(appengine.NewContext(req), "CL", req.FormValue("cl"))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	fmt.Fprintf(w, "OK!\n")
+}	
+
+func mailissue(ctxt appengine.Context, kind, key string) error {
+	ctxt.Infof("mailissue %s", key)
+	var cl CL
+	err := app.ReadData(ctxt, "CL", key, &cl)
+	if err != nil {
+		return nil // error already logged
+	}
+
+	if len(cl.NeedMailIssue) == 0 {
+		return nil
+	}
+	
+	var mailed []string
+	for _, issue := range cl.NeedMailIssue {
+		err := postIssueComment(ctxt, issue, "CL https://codereview.appspot.com/" + cl.CL + " mentions this issue.")
+		if err != nil {
+			ctxt.Criticalf("posting to issue %v: %v", issue, err)
+			continue
+		}
+		mailed = append(mailed, issue)
+	}
+	
+	err = app.Transaction(ctxt, func(ctxt appengine.Context) error {
+		var old CL
+		if err := app.ReadData(ctxt, "CL", key, &old); err != nil {
+			return err
+		}
+		old.MailedIssue = append(old.MailedIssue, mailed...)
+		return app.WriteData(ctxt, "CL", key, &old)
+	})
+	
 	return err
 }
 
@@ -551,6 +598,23 @@ func status(ctxt appengine.Context) string {
 		n++
 	}
 	fmt.Fprintf(w, "\n%d pending CLs.\n", n)
+
+	q = datastore.NewQuery("CL").
+		Filter("Active =", true).
+		Filter("NeedMailIssue >", "").
+		KeysOnly().
+		Limit(20000)
+	
+	n = 0
+	it = q.Run(ctxt)
+	for {
+		_, err := it.Next(nil)
+		if err != nil {
+			break
+		}
+		n++
+	}
+	fmt.Fprintf(w, "\n%d CLs need issue mails.\n", n)
 
 	return "<pre>" + html.EscapeString(w.String()) + "</pre>\n"
 }

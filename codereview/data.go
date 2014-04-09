@@ -14,7 +14,7 @@ import (
 )
 
 type CL struct {
-	DV int `dataversion:"19"`
+	DV int `dataversion:"20"`
 
 	// Fields mirrored from codereview.appspot.com.
 	// If you add a field here, update load.go.
@@ -73,7 +73,7 @@ func updateCL(cl *CL) {
 		cl.PrimaryReviewer != "close"
 
 	cl.DescIssue = nil
-	for _, m := range issueRE.FindAllStringSubmatch(cl.Desc) {
+	for _, m := range issueRE.FindAllStringSubmatch(cl.Desc, -1) {
 		cl.DescIssue = append(cl.DescIssue, m[1])
 	}
 	sort.Strings(cl.DescIssue)
