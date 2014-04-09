@@ -2,9 +2,17 @@ var mode = "all"
 
 function readURL() {
 	mode = window.location.hash.substr(1)
-	if(mode.match(/\+muted$/)) {
+	if(mode.match(/\+muted/)) {
 		$("#showmute").attr("checked","checked");
-		mode = mode.replace(/\+muted$/, "");
+		mode = mode.replace(/\+muted/, "");
+	}
+	if(mode.match(/\+hidecl/)) {
+		$("#showcl").attr("checked","");
+		mode = mode.replace(/\+hidecl/, "");
+	}
+	if(mode.match(/\+hideissue/)) {
+		$("#showissue").attr("checked","");
+		mode = mode.replace(/\+hideissue/, "");
 	}
 }
 
@@ -21,28 +29,40 @@ function redraw() {
 	// Start with all items hidden.
 	$("tr.item").addClass("hidden");
 	$("tbody.dir").addClass("hidden");
+	
+	$("tr.item").removeClass("unhide");
 
 	// Unhide the rows we want to show.
 	var show;
 	var showmute = $("#showmute").prop('checked');
+	var showcl = $("#showcl").prop('checked');
+	var showissue = $("#showissue").prop('checked');
 	if(mode == "mine") {
-		$("td.mine").parent().removeClass("hidden");
+		$("td.mine").parent().addClass("unhide");
 	} else if(mode == "todo") {
-		$("td.mine.todo").parent().removeClass("hidden");
+		$("td.mine.todo").parent().addClass("unhide");
 	} else if(mode == "unassigned") {
 		var show = $("td.unassigned").parent();
 		if(!showmute)
 			show = show.not("tbody.muted tr.item");
-		show.removeClass("hidden");
+		show.addClass("unhide");
 	} else {
 		mode = "all"
 		if(showmute) {
-			$("tr.item").removeClass("hidden");
+			$("tr.item").addClass("unhide");
 		} else {
-			$("tbody:not(.muted) tr.item").removeClass("hidden")
-			$("td.mine").parent().removeClass("hidden")
+			$("tbody:not(.muted) tr.item").addClass("unhide");
+			$("td.mine").parent().addClass("unhide");
 		}	
 	}
+	
+	// But keep issues and/or CLs hidden.
+	if(!showissue)
+		$("td.issue").parent().removeClass("unhide");
+	if(!showcl)
+		$("td.codereview").parent().removeClass("unhide");
+
+	$("tr.unhide").removeClass("hidden");	
 	
 	// Unhide the tbody containing the items we want to show.
 	// Unhiding a tbody will unhide its directory row.
@@ -56,6 +76,12 @@ function redraw() {
 	var hash = mode
 	if(showmute) {
 		hash += "+muted"
+	}
+	if(!showcl) {
+		hash += "+hidecl"
+	}
+	if(!showissue) {
+		hash += "+hideissue"
 	}
 	window.location.hash = hash
 }
@@ -161,4 +187,6 @@ $(document).ready(function() {
 
 	// Redraw any time the muting checkbox changes.
 	$("#showmute").change(redraw);
+	$("#showcl").change(redraw);
+	$("#showissue").change(redraw);
 })

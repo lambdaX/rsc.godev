@@ -126,7 +126,15 @@ func Task(ctxt appengine.Context, taskName, funcName string, args ...interface{}
 	// name can be reused. We let App Engine create a unique App Engine name
 	// for each task, and we use datastore entries to enforce constraints on our
 	// own names.
-	if !Lock(ctxt, "Task."+taskName, 10*365*24*time.Hour) {
+	//
+	// Ideally we would acquire the lock, add the task, and let the running of the
+	// task release the lock. In practice, sometimes we add a task successfully
+	// but either App Engine drops it on the floor, or it gets invoked and the code
+	// fails to Unlock the lock. I don't know which is more likely.
+	// Address this problem by making the lock time out after three hours.
+	// Ideally the lock would never time out.
+	lockName := "Task."+taskName
+	if !Lock(ctxt, lockName, 3*time.Hour) {
 		err := fmt.Errorf("app.Task: task %q already created and not yet completed", taskName)
 		ctxt.Errorf("%v", err)
 		return err
@@ -140,6 +148,7 @@ func Task(ctxt appengine.Context, taskName, funcName string, args ...interface{}
 	task.RetryOptions = tf.retry
 	if _, err := taskqueue.Add(ctxt, task, tf.queue); err != nil {
 		ctxt.Errorf("app.Task: creating task %q: taskqueue.Add: %v", taskName, err)
+		Unlock(ctxt, lockName)
 		return err
 	}
 	return nil

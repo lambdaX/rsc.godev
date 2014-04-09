@@ -164,7 +164,7 @@ func show(w http.ResponseWriter, req *http.Request) {
 }
 
 func init() {
-	app.Cron("codereview.load", 5*time.Minute, load)
+	app.Cron("codereview.load", 1*time.Minute, load)
 }
 
 func load(ctxt appengine.Context) error {
@@ -176,7 +176,7 @@ func load(ctxt appengine.Context) error {
 	for _, reviewerOrCC := range []string{"reviewer", "cc"} {
 		// The stored mtime is the most recent modification time we've seen.
 		// We ask for all changes since then.
-		mtimeKey := "codereview.mtime." + reviewerOrCC
+		mtimeKey := "codereview.mtime." + reviewerOrCC + "." + group
 		var mtime string
 		if appengine.IsDevAppServer() {
 			mtime = "2013-12-01 00:00:00" // limit fetching in empty datastore
@@ -254,26 +254,31 @@ func writeCL(ctxt appengine.Context, cl *CL, mtimeKey, modified string) error {
 		// Copy CL into original structure.
 		// This allows us to maintain other information in the CL structure
 		// and not overwrite it when the Rietveld information is updated.
-		if old.Modified.After(cl.Modified) {
-			return fmt.Errorf("CL %v: have %v but Rietveld sent %v", cl.CL, old.Modified, cl.Modified)
-		}
-		old.CL = cl.CL
-		old.Desc = cl.Desc
-		old.Owner = cl.Owner
-		old.OwnerEmail = cl.OwnerEmail
-		old.Created = cl.Created
-		old.Modified = cl.Modified
-		old.MessagesLoaded = cl.MessagesLoaded
-		if cl.MessagesLoaded {
-			old.Messages = cl.Messages
-			old.Submitted = cl.Submitted
-		}
-		old.Reviewers = cl.Reviewers
-		old.CC = cl.CC
-		old.Closed = cl.Closed
-		if !reflect.DeepEqual(old.PatchSets, cl.PatchSets) {
-			old.PatchSets = cl.PatchSets
-			old.PatchSetsLoaded = false
+		if cl.Dead {
+			old.Dead = true
+		} else {
+			old.Dead = false
+			if old.Modified.After(cl.Modified) {
+				return fmt.Errorf("CL %v: have %v but Rietveld sent %v", cl.CL, old.Modified, cl.Modified)
+			}
+			old.CL = cl.CL
+			old.Desc = cl.Desc
+			old.Owner = cl.Owner
+			old.OwnerEmail = cl.OwnerEmail
+			old.Created = cl.Created
+			old.Modified = cl.Modified
+			old.MessagesLoaded = cl.MessagesLoaded
+			if cl.MessagesLoaded {
+				old.Messages = cl.Messages
+				old.Submitted = cl.Submitted
+			}
+			old.Reviewers = cl.Reviewers
+			old.CC = cl.CC
+			old.Closed = cl.Closed
+			if !reflect.DeepEqual(old.PatchSets, cl.PatchSets) {
+				old.PatchSets = cl.PatchSets
+				old.PatchSetsLoaded = false
+			}
 		}
 
 		if err := app.WriteData(ctxt, "CL", cl.CL, &old); err != nil {
@@ -291,13 +296,17 @@ func writeCL(ctxt appengine.Context, cl *CL, mtimeKey, modified string) error {
 }
 
 func init() {
-	app.ScanData("codereview.loadmsg", 5*time.Minute,
+	app.ScanData("codereview.loadmsg", 1*time.Minute,
 		datastore.NewQuery("CL").Filter("MessagesLoaded =", false),
 		loadmsg)
 
-	app.ScanData("codereview.loadpatch", 5*time.Minute,
+	app.ScanData("codereview.loadpatch", 1*time.Minute,
 		datastore.NewQuery("CL").Filter("PatchSetsLoaded =", false),
 		loadpatch)
+
+//	app.ScanData("codereview.mail", 1*time.Minute,
+//		datastore.NewQuery("CL").Filter("NeedMailIssue !=", ""),
+//		mailissue)
 }
 
 func loadmsg(ctxt appengine.Context, kind, key string) error {
@@ -306,6 +315,14 @@ func loadmsg(ctxt appengine.Context, kind, key string) error {
 		"CL": key,
 	}))
 	if err != nil {
+		// Should do a better job returning a distinct error, but this will do for now.
+		if strings.Contains(err.Error(), "404 Not Found") {
+			cl := &CL{
+				CL: key,
+				Dead: true,
+			}
+			writeCL(ctxt, cl, "", "")
+		}
 		return nil // error already logged
 	}
 	cl := jcl.toCL(ctxt)
@@ -370,7 +387,7 @@ func loadpatch(ctxt appengine.Context, kind, key string) error {
 			old.Repo = m[1]
 		} else if m := diffRE2.FindStringSubmatch(last.Message); m != nil {
 			old.Repo = "code.google.com/p/" + m[1]
-		} else if m := diffRE2.FindStringSubmatch(last.Message); m != nil {
+		} else if m := diffRE3.FindStringSubmatch(last.Message); m != nil {
 			old.Repo = "code.google.com/p/" + m[2] + "." + m[1]
 		}
 		// NOTE: updateCL will shorten code.google.com/p/go to go.
@@ -432,14 +449,17 @@ func init() {
 
 func status(ctxt appengine.Context) string {
 	w := new(bytes.Buffer)
-	var t1, t2 string
 	var count int64
-	app.ReadMeta(ctxt, "codereview.mtime.reviewer", &t1)
-	app.ReadMeta(ctxt, "codereview.mtime.cc", &t2)
+	for _, group := range []string{"golang-dev", "golang-codereviews"} {
+		for _, reviewerOrCC := range []string{"reviewer", "cc"} {
+			var t string
+			mtimeKey := "codereview.mtime." + reviewerOrCC + "." + group
+			app.ReadMeta(ctxt, mtimeKey, &t)
+			fmt.Fprintf(w, "%v last update for %s\n", t, mtimeKey)
+		}
+	}
 	app.ReadMeta(ctxt, "codereview.count", &count)
-
-	fmt.Fprintf(w, "Reviewers as of %v\nCC as of %v\n%d CLs total\n", t1, t2, count)
-	fmt.Fprintln(w, time.Now())
+	fmt.Fprintf(w, "%d CLs total\n", count)
 
 	var chunk = 20000
 	if appengine.IsDevAppServer() {
@@ -459,8 +479,7 @@ func status(ctxt appengine.Context) string {
 		}
 		n++
 	}
-	fmt.Fprintf(w, "%d with PatchSetsLoaded <= false\n", n)
-	fmt.Fprintln(w, time.Now())
+	fmt.Fprintf(w, "%d with PatchSetsLoaded = false\n", n)
 
 	q = datastore.NewQuery("CL").
 		Filter("MessagesLoaded <=", false).
@@ -477,7 +496,6 @@ func status(ctxt appengine.Context) string {
 		n++
 	}
 	fmt.Fprintf(w, "%d with MessagesLoaded = false\n", n)
-	fmt.Fprintln(w, time.Now())
 
 	fmt.Fprintf(w, "\n")
 
@@ -495,7 +513,6 @@ func status(ctxt appengine.Context) string {
 		n++
 	}
 	fmt.Fprintf(w, "\n%d hg heads\n", n)
-	fmt.Fprintln(w, time.Now())
 
 	q = datastore.NewQuery("Meta").
 		Filter("__key__ >=", datastore.NewKey(ctxt, "Meta", "commit.count.", 0, nil)).
@@ -512,9 +529,9 @@ func status(ctxt appengine.Context) string {
 		if err != nil {
 			break
 		}
-		fmt.Fprintf(w, "%s %s\n\n", key.StringID(), m.JSON)
+		fmt.Fprintf(w, "%s %s\n", key.StringID(), m.JSON)
 	}
-	fmt.Fprintln(w, time.Now())
+	fmt.Fprintf(w, "\n")
 
 	q = datastore.NewQuery("CL").
 		Filter("Closed =", false).
@@ -534,7 +551,6 @@ func status(ctxt appengine.Context) string {
 		n++
 	}
 	fmt.Fprintf(w, "\n%d pending CLs.\n", n)
-	fmt.Fprintln(w, time.Now())
 
 	return "<pre>" + html.EscapeString(w.String()) + "</pre>\n"
 }

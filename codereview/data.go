@@ -14,7 +14,7 @@ import (
 )
 
 type CL struct {
-	DV int `dataversion:"18"`
+	DV int `dataversion:"19"`
 
 	// Fields mirrored from codereview.appspot.com.
 	// If you add a field here, update load.go.
@@ -32,6 +32,7 @@ type CL struct {
 	PatchSets  []string
 
 	// Derived fields.
+	Dead bool // CL has been removed
 	MessagesLoaded  bool      // Messages are up to date.
 	PatchSetsLoaded bool      // PatchSets have been stored (separately).
 	HasReviewers    bool      // len(Reviewers) > 0
@@ -47,6 +48,9 @@ type CL struct {
 	NeedsReview     bool      // time for reviewer to look at CL
 	LGTM            []string  // lgtms
 	NOTLGTM         []string  // not lgtms
+	DescIssue []string // issue numbers in latest description
+	MailedIssue []string // issues notified about this CL
+	NeedMailIssue []string // issues that need mail
 }
 
 func isSubmitted(cl *CL) bool {
@@ -58,13 +62,41 @@ func isSubmitted(cl *CL) bool {
 	return false
 }
 
+var issueRE = regexp.MustCompile(`(?i)\bissue ([0-9]+)\b`)
+
 func updateCL(cl *CL) {
 	cl.parseMessages()
 	cl.HasReviewers = len(cl.Reviewers) > 0
-
-	cl.Active = cl.Mailed && cl.HasReviewers && !cl.Closed && !cl.Submitted &&
+	
+	cl.Active = cl.Mailed && cl.HasReviewers && !cl.Closed && !cl.Submitted && !cl.Dead &&
 		time.Since(cl.Modified) < 365*24*time.Hour &&
 		cl.PrimaryReviewer != "close"
+
+	cl.DescIssue = nil
+	for _, m := range issueRE.FindAllStringSubmatch(cl.Desc) {
+		cl.DescIssue = append(cl.DescIssue, m[1])
+	}
+	sort.Strings(cl.DescIssue)
+	sort.Strings(cl.MailedIssue)
+
+	cl.NeedMailIssue = nil
+	if cl.Active {
+		mailed := make(map[string]bool)
+		for _, issue := range cl.MailedIssue {
+			mailed[issue] = true
+		}
+		for _, issue := range cl.DescIssue {
+			if !mailed[issue] {
+				cl.NeedMailIssue = append(cl.NeedMailIssue, issue)
+			}
+		}
+		sort.Strings(cl.NeedMailIssue)
+	}
+
+	if cl.Dead {
+		cl.MessagesLoaded = true
+		cl.PatchSetsLoaded = true
+	}
 
 	if strings.HasPrefix(cl.Repo, "code.google.com/p/go.") || cl.Repo == "code.google.com/p/go" {
 		cl.Repo = strings.TrimPrefix(cl.Repo, "code.google.com/p/")
@@ -188,6 +220,8 @@ var (
 	lgtmRE     = regexp.MustCompile(`(?im)^LGTM`)
 	notlgtmRE  = regexp.MustCompile(`(?im)^NOT LGTM`)
 	helloRE    = regexp.MustCompile(`(?m)Hello ([\w\-.]+)[ ,@][^\n]*\s+^I'd like you to review this change`)
+	helloRepoRE = regexp.MustCompile(`(?m)Hello[^\n]+\n\nI'd like you to review this change to\nhttps?://(?:[^/]*@)?(code.google.com/[pr]/[a-z0-9_.\-]+)`)
+	helloRepoRE2 = regexp.MustCompile(`(?m)Hello[^\n]+\n\nI'd like you to review this change to\nhttps?://(?:[^/]*@)?([a-z0-9_\-]+)\.googlecode\.com`)
 	ptalRE     = regexp.MustCompile(`(?im)^(PTAL|Please take a(nother)? look|I'd like you to review this change)`)
 )
 
@@ -310,6 +344,12 @@ func (cl *CL) parseMessages() {
 			if x := expandReviewer(m[1]); x != "" {
 				initialReviewer = x
 			}
+		}
+		if m := helloRepoRE.FindStringSubmatch(m.Text); m != nil && cl.Repo == "" {
+			cl.Repo = m[1]
+		}
+		if m := helloRepoRE2.FindStringSubmatch(m.Text); m != nil && cl.Repo == "" {
+			cl.Repo = "code.google.com/p/" + m[1]
 		}
 		if strings.Contains(m.Text, "*** Submitted as") {
 			cl.Submitted = true
