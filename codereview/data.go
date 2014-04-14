@@ -88,6 +88,7 @@ func updateCL(cl *CL) {
 		for _, issue := range cl.DescIssue {
 			if !mailed[issue] {
 				cl.NeedMailIssue = append(cl.NeedMailIssue, issue)
+				mailed[issue] = true
 			}
 		}
 		sort.Strings(cl.NeedMailIssue)
