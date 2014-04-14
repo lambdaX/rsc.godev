@@ -14,7 +14,7 @@ import (
 )
 
 type CL struct {
-	DV int `dataversion:"20"`
+	DV int `dataversion:"21"`
 
 	// Fields mirrored from codereview.appspot.com.
 	// If you add a field here, update load.go.
@@ -354,6 +354,9 @@ func (cl *CL) parseMessages() {
 		}
 		if strings.Contains(m.Text, "*** Submitted as") {
 			cl.Submitted = true
+		}
+		if explicitReviewer == "close" && ptalRE.MatchString(m.Text) {
+			explicitReviewer = ""
 		}
 		if m := reviewerRE.FindStringSubmatch(m.Text); m != nil {
 			if m[1] == "close" {
