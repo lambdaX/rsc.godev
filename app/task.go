@@ -133,7 +133,7 @@ func Task(ctxt appengine.Context, taskName, funcName string, args ...interface{}
 	// fails to Unlock the lock. I don't know which is more likely.
 	// Address this problem by making the lock time out after three hours.
 	// Ideally the lock would never time out.
-	lockName := "Task."+taskName
+	lockName := "Task." + taskName
 	if !Lock(ctxt, lockName, 3*time.Hour) {
 		err := fmt.Errorf("app.Task: task %q already created and not yet completed", taskName)
 		ctxt.Errorf("%v", err)

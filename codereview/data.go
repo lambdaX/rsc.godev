@@ -32,7 +32,7 @@ type CL struct {
 	PatchSets  []string
 
 	// Derived fields.
-	Dead bool // CL has been removed
+	Dead            bool      // CL has been removed
 	MessagesLoaded  bool      // Messages are up to date.
 	PatchSetsLoaded bool      // PatchSets have been stored (separately).
 	HasReviewers    bool      // len(Reviewers) > 0
@@ -48,9 +48,9 @@ type CL struct {
 	NeedsReview     bool      // time for reviewer to look at CL
 	LGTM            []string  // lgtms
 	NOTLGTM         []string  // not lgtms
-	DescIssue []string // issue numbers in latest description
-	MailedIssue []string // issues notified about this CL
-	NeedMailIssue []string // issues that need mail
+	DescIssue       []string  // issue numbers in latest description
+	MailedIssue     []string  // issues notified about this CL
+	NeedMailIssue   []string  // issues that need mail
 }
 
 func isSubmitted(cl *CL) bool {
@@ -67,7 +67,7 @@ var issueRE = regexp.MustCompile(`(?i)\bissue ([0-9]+)\b`)
 func updateCL(cl *CL) {
 	cl.parseMessages()
 	cl.HasReviewers = len(cl.Reviewers) > 0
-	
+
 	cl.Active = cl.Mailed && cl.HasReviewers && !cl.Closed && !cl.Submitted && !cl.Dead &&
 		time.Since(cl.Modified) < 365*24*time.Hour &&
 		cl.PrimaryReviewer != "close"
@@ -80,7 +80,7 @@ func updateCL(cl *CL) {
 	sort.Strings(cl.MailedIssue)
 
 	cl.NeedMailIssue = nil
-	if cl.Active {
+	if cl.Active && (strings.HasPrefix(cl.Repo, "go.") || cl.Repo == "go") {
 		mailed := make(map[string]bool)
 		for _, issue := range cl.MailedIssue {
 			mailed[issue] = true
@@ -216,14 +216,14 @@ func (cl *CL) Dirs() []string {
 }
 
 var (
-	reviewerRE = regexp.MustCompile(`(?m)^(?:TB)?R=([\w\-.]+)\b`)
-	qRE        = regexp.MustCompile(`(?m)^Q=(\w+)\b`)
-	lgtmRE     = regexp.MustCompile(`(?im)^LGTM`)
-	notlgtmRE  = regexp.MustCompile(`(?im)^NOT LGTM`)
-	helloRE    = regexp.MustCompile(`(?m)Hello ([\w\-.]+)[ ,@][^\n]*\s+^I'd like you to review this change`)
-	helloRepoRE = regexp.MustCompile(`(?m)Hello[^\n]+\n\nI'd like you to review this change to\nhttps?://(?:[^/]*@)?(code.google.com/[pr]/[a-z0-9_.\-]+)`)
+	reviewerRE   = regexp.MustCompile(`(?m)^(?:TB)?R=([\w\-.]+)\b`)
+	qRE          = regexp.MustCompile(`(?m)^Q=(\w+)\b`)
+	lgtmRE       = regexp.MustCompile(`(?im)^LGTM`)
+	notlgtmRE    = regexp.MustCompile(`(?im)^NOT LGTM`)
+	helloRE      = regexp.MustCompile(`(?m)Hello ([\w\-.]+)[ ,@][^\n]*\s+^I'd like you to review this change`)
+	helloRepoRE  = regexp.MustCompile(`(?m)Hello[^\n]+\n\nI'd like you to review this change to\nhttps?://(?:[^/]*@)?(code.google.com/[pr]/[a-z0-9_.\-]+)`)
 	helloRepoRE2 = regexp.MustCompile(`(?m)Hello[^\n]+\n\nI'd like you to review this change to\nhttps?://(?:[^/]*@)?([a-z0-9_\-]+)\.googlecode\.com`)
-	ptalRE     = regexp.MustCompile(`(?im)^(PTAL|Please take a(nother)? look|I'd like you to review this change)`)
+	ptalRE       = regexp.MustCompile(`(?im)^(PTAL|Please take a(nother)? look|I'd like you to review this change)`)
 )
 
 func stringKeys(m map[string]bool) []string {
@@ -386,7 +386,7 @@ func (cl *CL) parseMessages() {
 	case firstResponder != "":
 		cl.PrimaryReviewer = firstResponder
 	}
-	
+
 	if cl.PrimaryReviewer == "golang-dev" {
 		cl.PrimaryReviewer = ""
 	}

@@ -2,15 +2,15 @@ package codereview
 
 import (
 	"bytes"
-	"html"
 	"fmt"
-	"time"
-	"strconv"
+	"html"
 	"net/http"
-	
+	"strconv"
+	"time"
+
 	"app"
 	"codereview/rietveld"
-	
+
 	"appengine"
 	"appengine/datastore"
 	"appengine/urlfetch"
@@ -56,16 +56,16 @@ func SetReviewer(ctxt appengine.Context, clnumber, who string) error {
 		rev = append(rev, who)
 	}
 	c := &rietveld.Comment{
-		Message: "R=" + who + " (assigned by " + u.Email + ")",
+		Message:   "R=" + who + " (assigned by " + u.Email + ")",
 		Reviewers: rev,
-		Cc: issue.CcNicks,
+		Cc:        issue.CcNicks,
 	}
 	if err := r.AddComment(issue, c); err != nil {
 		ctxt.Criticalf("addcomment: %s", err)
 		return err
 	}
-	
-	loadmsg(ctxt, "CL", clnumber)	
+
+	loadmsg(ctxt, "CL", clnumber)
 	return nil
 }
 
@@ -81,7 +81,7 @@ func init() {
 	http.HandleFunc("/admin/codereview/setreviewer", setreviewer)
 	http.HandleFunc("/admin/codereview/fixone", fixone)
 	http.HandleFunc("/admin/codereview/refresh", refresh)
-	
+
 	app.RegisterStatus("codereview golang-dev ⇒ golang-codereviews conversion", fixgolangstatus)
 
 	app.ScanData("codereview.fixgolang-reviewer", 5*time.Minute,
@@ -99,14 +99,14 @@ func init() {
 
 func fixgolangstatus(ctxt appengine.Context) string {
 	w := new(bytes.Buffer)
-	
+
 	const chunk = 1000
 	keys, err := datastore.NewQuery("CL").
-			Filter("Active =", true).
-			Filter("Reviewers =", "golang-dev@googlegroups.com").
-			KeysOnly().
-			Limit(chunk).
-			GetAll(ctxt, nil)
+		Filter("Active =", true).
+		Filter("Reviewers =", "golang-dev@googlegroups.com").
+		KeysOnly().
+		Limit(chunk).
+		GetAll(ctxt, nil)
 	if err != nil {
 		fmt.Fprintf(w, "searching for active R=golang-dev: %v\n", err)
 	} else {
@@ -121,11 +121,11 @@ func fixgolangstatus(ctxt appengine.Context) string {
 	}
 
 	keys, err = datastore.NewQuery("CL").
-			Filter("Active =", true).
-			Filter("CC =", "golang-dev@googlegroups.com").
-			KeysOnly().
-			Limit(chunk).
-			GetAll(ctxt, nil)
+		Filter("Active =", true).
+		Filter("CC =", "golang-dev@googlegroups.com").
+		KeysOnly().
+		Limit(chunk).
+		GetAll(ctxt, nil)
 	if err != nil {
 		fmt.Fprintf(w, "searching for active CC=golang-dev: %v\n", err)
 	} else {
@@ -141,7 +141,6 @@ func fixgolangstatus(ctxt appengine.Context) string {
 
 	return "<pre>" + html.EscapeString(w.String()) + "</pre>\n"
 }
-
 
 func setreviewer(w http.ResponseWriter, req *http.Request) {
 	if err := SetReviewer(appengine.NewContext(req), req.FormValue("cl"), req.FormValue("who")); err != nil {
@@ -199,9 +198,9 @@ func fixgolang(ctxt appengine.Context, kind, key string) error {
 		return nil // already good
 	}
 	c := &rietveld.Comment{
-		Message: golangCodereviewMessage,
+		Message:   golangCodereviewMessage,
 		Reviewers: issue.ReviewerMails,
-		Cc: issue.CcMails,
+		Cc:        issue.CcMails,
 	}
 	if err := r.AddComment(issue, c); err != nil {
 		ctxt.Criticalf("addcomment: %s", err)

@@ -68,7 +68,7 @@ func dirKey(s string) string {
 // them all in one place.
 type display struct {
 	email string
-	pref UserPref
+	pref  UserPref
 }
 
 // UserPref holds user preferences; stored in the datastore under email address.
@@ -177,7 +177,6 @@ func findEmail(ctxt appengine.Context) string {
 	return self
 }
 
-
 func showDash(w http.ResponseWriter, req *http.Request) {
 	if req.URL.Path == "/login" {
 		http.Redirect(w, req, "/", 302)
@@ -252,51 +251,51 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 	for _, g := range groups {
 		sort.Sort(itemsBySummary(g.Items))
 	}
-	
+
 	// Load information about logged-in user.
 	var d display
 	d.email = findEmail(ctxt)
 	if d.email != "" {
 		app.ReadData(ctxt, "UserPref", d.email, &d.pref)
 	}
-	
+
 	/*
 
-	nrow := 0
-	self := findEmail(ctxt)
-	isme := func(s string) bool { return s == self || s == "golang-dev" }
+		nrow := 0
+		self := findEmail(ctxt)
+		isme := func(s string) bool { return s == self || s == "golang-dev" }
 
-	muted := func(dir string) string {
-		for _, targ := range pref.Muted {
-			if dir == targ {
-				return "muted"
+		muted := func(dir string) string {
+			for _, targ := range pref.Muted {
+				if dir == targ {
+					return "muted"
+				}
+			}
+			return ""
+		}
+		todo := func(cl *codereview.CL) bool {
+			if cl.NeedsReview {
+				return isme(defaultReviewer(cl))
+			} else {
+				return isme(cl.OwnerEmail)
 			}
 		}
-		return ""
-	}
-	todo := func(cl *codereview.CL) bool {
-		if cl.NeedsReview {
-			return isme(defaultReviewer(cl))
-		} else {
-			return isme(cl.OwnerEmail)
-		}
-	}
-	todoItem := func(item *Item) bool {
-		for _, cl := range item.CLs {
-			if todo(cl) {
-				return true
+		todoItem := func(item *Item) bool {
+			for _, cl := range item.CLs {
+				if todo(cl) {
+					return true
+				}
 			}
+			return false
 		}
-		return false
-	}
-	todoGroup := func(g *Group) bool {
-		for _, item := range g.Items {
-			if todoItem(item) {
-				return true
+		todoGroup := func(g *Group) bool {
+			for _, item := range g.Items {
+				if todoItem(item) {
+					return true
+				}
 			}
+			return false
 		}
-		return false
-	}
 	*/
 
 	tmpl, err := ioutil.ReadFile("template/dash.html")
@@ -305,16 +304,16 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	t, err := template.New("main").Funcs(template.FuncMap{
-		"css": d.css,
-		"join": d.join,
-		"mine": d.mine,
-		"muted": d.muted,
-		"old": d.old,
-		"replace": strings.Replace,
+		"css":      d.css,
+		"join":     d.join,
+		"mine":     d.mine,
+		"muted":    d.muted,
+		"old":      d.old,
+		"replace":  strings.Replace,
 		"reviewer": d.reviewer,
-		"second": d.second,
-		"short": d.short,
-		"since": d.since,
+		"second":   d.second,
+		"short":    d.short,
+		"since":    d.since,
 	}).Parse(string(tmpl))
 	if err != nil {
 		ctxt.Errorf("parsing template: %v", err)
@@ -454,7 +453,7 @@ func uiOperation(w http.ResponseWriter, req *http.Request) {
 			fmt.Fprintf(w, "unable to update")
 			return
 		}
-	
+
 	case "reviewer":
 		clnum := req.FormValue("cl")
 		who := req.FormValue("reviewer")
@@ -482,4 +481,3 @@ func uiOperation(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 }
-

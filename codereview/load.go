@@ -173,66 +173,66 @@ func load(ctxt appengine.Context) error {
 	deadline := time.Now().Add(5 * time.Minute)
 
 	for _, group := range []string{"golang-dev", "golang-codereviews"} {
-	for _, reviewerOrCC := range []string{"reviewer", "cc"} {
-		// The stored mtime is the most recent modification time we've seen.
-		// We ask for all changes since then.
-		mtimeKey := "codereview.mtime." + reviewerOrCC + "." + group
-		var mtime string
-		if appengine.IsDevAppServer() {
-			mtime = "2013-12-01 00:00:00" // limit fetching in empty datastore
-		}
-		app.ReadMeta(ctxt, mtimeKey, &mtime)
-		cursor := ""
-
-		// Rietveld gives us back times with microseconds, but it rejects microseconds
-		// in the ModifiedAfter URL parameter. Drop them. We'll see a few of the most
-		// recent CLs again. No big deal.
-		if i := strings.Index(mtime, "."); i >= 0 {
-			mtime = mtime[:i]
-		}
-
-		const itemsPerPage = 100
-		for n := 0; ; n++ {
-			var q struct {
-				Cursor  string    `json:"cursor"`
-				Results []*jsonCL `json:"results"`
+		for _, reviewerOrCC := range []string{"reviewer", "cc"} {
+			// The stored mtime is the most recent modification time we've seen.
+			// We ask for all changes since then.
+			mtimeKey := "codereview.mtime." + reviewerOrCC + "." + group
+			var mtime string
+			if appengine.IsDevAppServer() {
+				mtime = "2013-12-01 00:00:00" // limit fetching in empty datastore
 			}
-			err := fetchJSON(ctxt, &q, urlWithParams(queryTmpl, map[string]string{
-				"ReviewerOrCC":  reviewerOrCC,
-				"Group": group,
-				"ModifiedAfter": mtime,
-				"Order":         "modified",
-				"Cursor":        cursor,
-				"Limit":         fmt.Sprint(itemsPerPage),
-			}))
-			if err != nil {
-				ctxt.Errorf("loading codereview by %s: URL <%s>: %v", reviewerOrCC, q, err)
-				break
-			}
-			ctxt.Infof("found %d CLs", len(q.Results))
-			if len(q.Results) == 0 {
-				break
-			}
-			cursor = q.Cursor
+			app.ReadMeta(ctxt, mtimeKey, &mtime)
+			cursor := ""
 
-			for _, jcl := range q.Results {
-				cl := jcl.toCL(ctxt)
-				if err := writeCL(ctxt, cl, mtimeKey, jcl.Modified); err != nil {
-					break // error already logged
+			// Rietveld gives us back times with microseconds, but it rejects microseconds
+			// in the ModifiedAfter URL parameter. Drop them. We'll see a few of the most
+			// recent CLs again. No big deal.
+			if i := strings.Index(mtime, "."); i >= 0 {
+				mtime = mtime[:i]
+			}
+
+			const itemsPerPage = 100
+			for n := 0; ; n++ {
+				var q struct {
+					Cursor  string    `json:"cursor"`
+					Results []*jsonCL `json:"results"`
+				}
+				err := fetchJSON(ctxt, &q, urlWithParams(queryTmpl, map[string]string{
+					"ReviewerOrCC":  reviewerOrCC,
+					"Group":         group,
+					"ModifiedAfter": mtime,
+					"Order":         "modified",
+					"Cursor":        cursor,
+					"Limit":         fmt.Sprint(itemsPerPage),
+				}))
+				if err != nil {
+					ctxt.Errorf("loading codereview by %s: URL <%s>: %v", reviewerOrCC, q, err)
+					break
+				}
+				ctxt.Infof("found %d CLs", len(q.Results))
+				if len(q.Results) == 0 {
+					break
+				}
+				cursor = q.Cursor
+
+				for _, jcl := range q.Results {
+					cl := jcl.toCL(ctxt)
+					if err := writeCL(ctxt, cl, mtimeKey, jcl.Modified); err != nil {
+						break // error already logged
+					}
+				}
+
+				if len(q.Results) < itemsPerPage {
+					ctxt.Infof("reached end of results - codereview by %s up to date", reviewerOrCC)
+					break
+				}
+
+				if time.Now().After(deadline) {
+					ctxt.Infof("more to do for codereview by %s - rescheduling", reviewerOrCC)
+					return app.ErrMoreCron
 				}
 			}
-
-			if len(q.Results) < itemsPerPage {
-				ctxt.Infof("reached end of results - codereview by %s up to date", reviewerOrCC)
-				break
-			}
-
-			if time.Now().After(deadline) {
-				ctxt.Infof("more to do for codereview by %s - rescheduling", reviewerOrCC)
-				return app.ErrMoreCron
-			}
 		}
-	}
 	}
 
 	ctxt.Infof("all done")
@@ -318,7 +318,7 @@ func loadmsg(ctxt appengine.Context, kind, key string) error {
 		// Should do a better job returning a distinct error, but this will do for now.
 		if strings.Contains(err.Error(), "404 Not Found") {
 			cl := &CL{
-				CL: key,
+				CL:   key,
 				Dead: true,
 			}
 			writeCL(ctxt, cl, "", "")
@@ -407,7 +407,7 @@ func testmailissue(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	fmt.Fprintf(w, "OK!\n")
-}	
+}
 
 func mailissue(ctxt appengine.Context, kind, key string) error {
 	ctxt.Infof("mailissue %s", key)
@@ -420,17 +420,17 @@ func mailissue(ctxt appengine.Context, kind, key string) error {
 	if len(cl.NeedMailIssue) == 0 {
 		return nil
 	}
-	
+
 	var mailed []string
 	for _, issue := range cl.NeedMailIssue {
-		err := postIssueComment(ctxt, issue, "CL https://codereview.appspot.com/" + cl.CL + " mentions this issue.")
+		err := postIssueComment(ctxt, issue, "CL https://codereview.appspot.com/"+cl.CL+" mentions this issue.")
 		if err != nil {
 			ctxt.Criticalf("posting to issue %v: %v", issue, err)
 			continue
 		}
 		mailed = append(mailed, issue)
 	}
-	
+
 	err = app.Transaction(ctxt, func(ctxt appengine.Context) error {
 		var old CL
 		if err := app.ReadData(ctxt, "CL", key, &old); err != nil {
@@ -439,7 +439,7 @@ func mailissue(ctxt appengine.Context, kind, key string) error {
 		old.MailedIssue = append(old.MailedIssue, mailed...)
 		return app.WriteData(ctxt, "CL", key, &old)
 	})
-	
+
 	return err
 }
 
@@ -604,7 +604,7 @@ func status(ctxt appengine.Context) string {
 		Filter("NeedMailIssue >", "").
 		KeysOnly().
 		Limit(20000)
-	
+
 	n = 0
 	it = q.Run(ctxt)
 	for {

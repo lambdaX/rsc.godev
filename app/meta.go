@@ -5,11 +5,11 @@
 package app
 
 import (
-	"encoding/json"
-	"net/http"
-	"fmt"
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"html"
+	"net/http"
 
 	"appengine"
 	"appengine/memcache"
@@ -120,7 +120,7 @@ func metaedit(w http.ResponseWriter, req *http.Request) {
 	op := req.FormValue("op")
 	var value json.RawMessage
 	ReadMeta(ctxt, key, &value)
-	
+
 	if req.Method != "GET" {
 		switch op {
 		case "Read":
@@ -139,7 +139,7 @@ func metaedit(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 	}
-	
+
 	var buf bytes.Buffer
 	if len(value) > 0 {
 		if err := json.Indent(&buf, value, "", "\t"); err != nil {
@@ -147,6 +147,6 @@ func metaedit(w http.ResponseWriter, req *http.Request) {
 			fmt.Fprintf(&buf, "malformed JSON")
 		}
 	}
-	
+
 	fmt.Fprintf(w, editForm, html.EscapeString(key), html.EscapeString(buf.String()))
 }

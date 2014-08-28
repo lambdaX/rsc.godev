@@ -6,12 +6,12 @@ package codereview
 
 import (
 	"bytes"
-	"encoding/xml"
 	"crypto/rand"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
-	
+
 	"app"
 
 	"appengine"
@@ -33,15 +33,15 @@ func oauthConfig(ctxt appengine.Context) (*oauth.Config, error) {
 	if err := app.ReadMeta(ctxt, "googleapi.clientsecret", &clientSecret); err != nil {
 		return nil, err
 	}
-	
+
 	cfg := &oauth.Config{
-		ClientId: clientID,
+		ClientId:     clientID,
 		ClientSecret: clientSecret,
-		Scope: "https://code.google.com/feeds/issues",
-		AuthURL:  "https://accounts.google.com/o/oauth2/auth",
-		TokenURL: "https://accounts.google.com/o/oauth2/token",
-		RedirectURL: "https://go-dev.appspot.com/codetoken",
-		AccessType: "offline",
+		Scope:        "https://code.google.com/feeds/issues",
+		AuthURL:      "https://accounts.google.com/o/oauth2/auth",
+		TokenURL:     "https://accounts.google.com/o/oauth2/token",
+		RedirectURL:  "https://go-dev.appspot.com/codetoken",
+		AccessType:   "offline",
 	}
 	return cfg, nil
 }
@@ -53,7 +53,7 @@ func codelogin(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	
+
 	clientID := req.FormValue("clientid")
 	if clientID != "" {
 		app.WriteMeta(ctxt, "googleapi.clientid", &clientID)
@@ -73,25 +73,25 @@ func codelogin(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	
+
 	authURL := cfg.AuthCodeURL(randState)
 	http.Redirect(w, req, authURL, 301)
 }
 
 func codetoken(w http.ResponseWriter, req *http.Request) {
 	ctxt := appengine.NewContext(req)
-	
+
 	var randState string
 	if err := app.ReadMeta(ctxt, "codelogin.random", &randState); err != nil {
 		panic(err)
 	}
-	
+
 	cfg, err := oauthConfig(ctxt)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	
+
 	if req.FormValue("state") != randState {
 		http.Error(w, "bad state", 500)
 		return
@@ -101,28 +101,28 @@ func codetoken(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "missing code", 500)
 		return
 	}
-	
+
 	tr := &oauth.Transport{
-		Config: cfg,
+		Config:    cfg,
 		Transport: urlfetch.Client(ctxt).Transport,
 	}
 
 	_, err = tr.Exchange(code)
 	if err != nil {
-		http.Error(w, "exchanging code: " + err.Error(), 500)
+		http.Error(w, "exchanging code: "+err.Error(), 500)
 		return
 	}
-	
+
 	if err := app.WriteMeta(ctxt, "codelogin.token", tr.Token); err != nil {
-		http.Error(w, "writing token: " + err.Error(), 500)
+		http.Error(w, "writing token: "+err.Error(), 500)
 		return
 	}
-	
+
 	app.DeleteMeta(ctxt, "codelogin.random")
-	
+
 	fmt.Fprintf(w, "have token; expires at %v\n", tr.Token.Expiry)
 }
-	
+
 func randomID() (string, error) {
 	buf := make([]byte, 16)
 	_, err := io.ReadFull(rand.Reader, buf)
@@ -145,20 +145,20 @@ func testIssue(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(w, "OK!\n")
 }
 
-func postIssueComment(ctxt appengine.Context, id, comment string) error{
+func postIssueComment(ctxt appengine.Context, id, comment string) error {
 	cfg, err := oauthConfig(ctxt)
 	if err != nil {
 		return fmt.Errorf("oauthconfig: %v", err)
 	}
-	
+
 	var tok oauth.Token
 	if err := app.ReadMeta(ctxt, "codelogin.token", &tok); err != nil {
 		return fmt.Errorf("reading token: %v", err)
 	}
-	
+
 	tr := &oauth.Transport{
-		Config: cfg,
-		Token: &tok,
+		Config:    cfg,
+		Token:     &tok,
 		Transport: urlfetch.Client(ctxt).Transport,
 	}
 	client := tr.Client()
@@ -176,7 +176,7 @@ func postIssueComment(ctxt appengine.Context, id, comment string) error{
   </issues:updates>
 </entry>
 `)
-	u := "https://code.google.com/feeds/issues/p/go/issues/"+id+"/comments/full"
+	u := "https://code.google.com/feeds/issues/p/go/issues/" + id + "/comments/full"
 	req, err := http.NewRequest("POST", u, &buf)
 	if err != nil {
 		return fmt.Errorf("write: %v", err)
