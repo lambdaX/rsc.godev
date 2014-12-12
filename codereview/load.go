@@ -24,6 +24,8 @@ import (
 	"appengine"
 	"appengine/datastore"
 	"appengine/urlfetch"
+
+	"github.com/rsc/appstats"
 )
 
 type jsonCL struct {
@@ -141,12 +143,11 @@ func (j *jsonFile) toFile(ctxt appengine.Context, name string) File {
 }
 
 func init() {
-	http.HandleFunc("/admin/codereview/show/", show)
+	http.Handle("/admin/codereview/show/", appstats.NewHandler(show))
 }
 
-func show(w http.ResponseWriter, req *http.Request) {
+func show(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	ctxt := appengine.NewContext(req)
 	var cl CL
 	err := app.ReadData(ctxt, "CL", strings.TrimPrefix(req.URL.Path, "/admin/codereview/show/"), &cl)
 	if err != nil {
@@ -397,11 +398,11 @@ func loadpatch(ctxt appengine.Context, kind, key string) error {
 }
 
 func init() {
-	http.HandleFunc("/admin/codereview/mailissue", testmailissue)
+	http.Handle("/admin/codereview/mailissue", appstats.NewHandler(testmailissue))
 }
 
-func testmailissue(w http.ResponseWriter, req *http.Request) {
-	err := mailissue(appengine.NewContext(req), "CL", req.FormValue("cl"))
+func testmailissue(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
+	err := mailissue(ctxt, "CL", req.FormValue("cl"))
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

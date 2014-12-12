@@ -11,6 +11,8 @@ import (
 
 	"appengine"
 	"appengine/datastore"
+
+	"github.com/rsc/appstats"
 )
 
 var errLocked = errors.New("locked")
@@ -44,11 +46,10 @@ func Unlock(ctxt appengine.Context, name string) {
 	DeleteMeta(ctxt, "Lock:"+name)
 }
 
-func breaklock(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
+func breaklock(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	Unlock(ctxt, req.URL.Query().Get("name"))
 }
 
 func init() {
-	http.HandleFunc("/admin/app/breaklock", breaklock)
+	http.Handle("/admin/app/breaklock", appstats.NewHandler(breaklock))
 }

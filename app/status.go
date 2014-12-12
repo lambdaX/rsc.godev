@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"appengine"
+
+	"github.com/rsc/appstats"
 )
 
 type statusElem struct {
@@ -43,15 +45,14 @@ func RegisterStatus(heading string, content func(ctxt appengine.Context) string)
 // For example, if the status page should be made publicly visible:
 //
 //	func init() {
-//		http.HandleFunc("/status", app.StatusPage)
+//		http.Handle("/status", appstats.NewHandler(app.StatusPage))
 //	}
 //
-func StatusPage(w http.ResponseWriter, req *http.Request) {
+func StatusPage(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	status.RLock()
 	elems := status.elems
 	status.RUnlock()
 
-	ctxt := appengine.NewContext(req)
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "<h1>status</h2>\n")
 	for _, elem := range elems {
@@ -63,5 +64,5 @@ func StatusPage(w http.ResponseWriter, req *http.Request) {
 }
 
 func init() {
-	http.HandleFunc("/admin/app/status", StatusPage)
+	http.Handle("/admin/app/status", appstats.NewHandler(StatusPage))
 }

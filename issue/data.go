@@ -9,20 +9,21 @@ import "time"
 // An Issue represents a single issue on the tracker.
 // The initial report is Comment[0] and is always present.
 type Issue struct {
-	DV         int `dataversion:"3"`
-	ID         int
-	Created    time.Time
-	Modified   time.Time
-	Summary    string
-	Status     string
-	Duplicate  int // if Status == "Duplicate"
-	Owner      string
-	CC         []string
-	Label      []string
-	Comment    []Comment `datastore:",noindex"`
-	State      string
-	Stars      int
-	ClosedDate time.Time
+	DV             int `dataversion:"6"`
+	ID             int
+	Created        time.Time
+	Modified       time.Time
+	Summary        string
+	Status         string
+	Duplicate      int // if Status == "Duplicate"
+	Owner          string
+	CC             []string
+	Label          []string
+	Comment        []Comment `datastore:",noindex"`
+	State          string
+	Stars          int
+	ClosedDate     time.Time
+	NeedGithubNote bool
 }
 
 // A Comment represents a single comment on an issue.

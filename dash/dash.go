@@ -22,11 +22,13 @@ import (
 	"appengine"
 	"appengine/datastore"
 	"appengine/user"
+
+	"github.com/rsc/appstats"
 )
 
 func init() {
-	http.HandleFunc("/", showDash)
-	http.HandleFunc("/uiop", uiOperation)
+	http.Handle("/", appstats.NewHandler(showDash))
+	http.Handle("/uiop", appstats.NewHandler(uiOperation))
 }
 
 type Group struct {
@@ -177,7 +179,7 @@ func findEmail(ctxt appengine.Context) string {
 	return self
 }
 
-func showDash(w http.ResponseWriter, req *http.Request) {
+func showDash(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	if req.URL.Path == "/login" {
 		http.Redirect(w, req, "/", 302)
 		return
@@ -187,7 +189,6 @@ func showDash(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	const chunk = 1000
-	ctxt := appengine.NewContext(req)
 	ctxt.Errorf("DASH")
 	req.ParseForm()
 
@@ -403,8 +404,7 @@ func clBugs(cl *codereview.CL) []int {
 	return out
 }
 
-func uiOperation(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
+func uiOperation(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	email := findEmail(ctxt)
 	d := display{email: email}
 	if d.email == "" {

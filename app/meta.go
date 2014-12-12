@@ -13,6 +13,8 @@ import (
 
 	"appengine"
 	"appengine/memcache"
+
+	"github.com/rsc/appstats"
 )
 
 type meta struct {
@@ -95,7 +97,7 @@ func DeleteMeta(ctxt appengine.Context, key string) error {
 }
 
 func init() {
-	http.HandleFunc("/admin/app/metaedit", metaedit)
+	http.Handle("/admin/app/metaedit", appstats.NewHandler(metaedit))
 }
 
 var editForm = `<html>
@@ -112,10 +114,9 @@ Value: <textarea name="value" columns=80 rows=25>%s</textarea>
 </form>
 `
 
-func metaedit(w http.ResponseWriter, req *http.Request) {
+func metaedit(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	// TODO: XSRF
 
-	ctxt := appengine.NewContext(req)
 	key := req.FormValue("key")
 	op := req.FormValue("op")
 	var value json.RawMessage

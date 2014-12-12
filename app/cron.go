@@ -16,6 +16,8 @@ import (
 	"appengine"
 	"appengine/datastore"
 	"appengine/taskqueue"
+
+	"github.com/rsc/appstats"
 )
 
 var cron struct {
@@ -63,7 +65,7 @@ func Cron(name string, period time.Duration, f func(appengine.Context) error) {
 var ErrMoreCron = errors.New("cron job has more work to do")
 
 func init() {
-	http.HandleFunc("/admin/app/cron", cronHandler)
+	http.Handle("/admin/app/cron", appstats.NewHandler(cronHandler))
 	RegisterStatus("cron", cronStatus)
 }
 
@@ -85,12 +87,11 @@ func init() {
 // cronHandler is called by app engine cron to check for work
 // and also called by task queue invocations to run the work for
 // a specific registered functions.
-func cronHandler(w http.ResponseWriter, req *http.Request) {
+func cronHandler(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	cron.RLock()
 	list := cron.list
 	cron.RUnlock()
 
-	ctxt := appengine.NewContext(req)
 	force := req.FormValue("force") == "1"
 
 	// We're being called by app engine master cron,

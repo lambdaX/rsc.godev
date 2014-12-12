@@ -26,15 +26,16 @@ import (
 	"appengine"
 	"appengine/datastore"
 	"appengine/urlfetch"
+
+	"github.com/rsc/appstats"
 )
 
 func init() {
-	http.HandleFunc("/admin/issue/show/", show)
+	http.Handle("/admin/issue/show/", appstats.NewHandler(show))
 }
 
-func show(w http.ResponseWriter, req *http.Request) {
+func show(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	ctxt := appengine.NewContext(req)
 	var issue Issue
 	err := app.ReadData(ctxt, "Issue", strings.TrimPrefix(req.URL.Path, "/admin/issue/show/"), &issue)
 	if err != nil {
@@ -73,7 +74,7 @@ func status(ctxt appengine.Context) string {
 func init() {
 	app.Cron("issue.load", 5*time.Minute, load)
 
-	http.HandleFunc("/admin/issueload", func(w http.ResponseWriter, req *http.Request) { load(appengine.NewContext(req)) })
+	http.Handle("/admin/issueload", appstats.NewHandler(func(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) { load(ctxt) }))
 }
 
 func load(ctxt appengine.Context) error {
@@ -193,6 +194,7 @@ func writeIssue(ctxt appengine.Context, issue *Issue, stateKey string, state int
 		old.Modified = issue.Modified
 		old.Stars = issue.Stars
 		old.ClosedDate = issue.ClosedDate
+		updateIssue(&old)
 
 		if err := app.WriteData(ctxt, "Issue", fmt.Sprint(issue.ID), &old); err != nil {
 			return err
@@ -206,6 +208,19 @@ func writeIssue(ctxt appengine.Context, issue *Issue, stateKey string, state int
 		ctxt.Errorf("storing issue %v: %v", issue.ID, err)
 	}
 	return err
+}
+
+func init() {
+	app.RegisterDataUpdater("Issue", updateIssue)
+}
+
+func updateIssue(issue *Issue) {
+	for _, label := range issue.Label {
+		if label == "IssueMoved" {
+			return
+		}
+	}
+	issue.NeedGithubNote = true
 }
 
 type _Feed struct {

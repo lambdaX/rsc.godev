@@ -18,6 +18,8 @@ import (
 	"appengine/datastore"
 	"appengine/delay"
 	"appengine/taskqueue"
+
+	"github.com/rsc/appstats"
 )
 
 var updaters struct {
@@ -194,11 +196,11 @@ type kindType struct {
 
 func init() {
 	RegisterStatus("data updater", updateStatus)
-	http.HandleFunc("/admin/app/update", startUpdate)
+	http.Handle("/admin/app/update", appstats.NewHandler(startUpdate))
 }
 
-func startUpdate(w http.ResponseWriter, req *http.Request) {
-	backgroundUpdate(appengine.NewContext(req))
+func startUpdate(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
+	backgroundUpdate(ctxt)
 }
 
 func updateStatus(ctxt appengine.Context) string {

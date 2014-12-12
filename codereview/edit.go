@@ -15,6 +15,8 @@ import (
 	"appengine/datastore"
 	"appengine/urlfetch"
 	"appengine/user"
+
+	"github.com/rsc/appstats"
 )
 
 type pw struct {
@@ -73,14 +75,14 @@ func RefreshCL(ctxt appengine.Context, clnumber string) {
 	loadmsg(ctxt, "CL", clnumber)
 }
 
-func refresh(w http.ResponseWriter, req *http.Request) {
-	RefreshCL(appengine.NewContext(req), req.FormValue("cl"))
+func refresh(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
+	RefreshCL(ctxt, req.FormValue("cl"))
 }
 
 func init() {
-	http.HandleFunc("/admin/codereview/setreviewer", setreviewer)
-	http.HandleFunc("/admin/codereview/fixone", fixone)
-	http.HandleFunc("/admin/codereview/refresh", refresh)
+	http.Handle("/admin/codereview/setreviewer", appstats.NewHandler(setreviewer))
+	http.Handle("/admin/codereview/fixone", appstats.NewHandler(fixone))
+	http.Handle("/admin/codereview/refresh", appstats.NewHandler(refresh))
 
 	app.RegisterStatus("codereview golang-dev ⇒ golang-codereviews conversion", fixgolangstatus)
 
@@ -142,16 +144,16 @@ func fixgolangstatus(ctxt appengine.Context) string {
 	return "<pre>" + html.EscapeString(w.String()) + "</pre>\n"
 }
 
-func setreviewer(w http.ResponseWriter, req *http.Request) {
-	if err := SetReviewer(appengine.NewContext(req), req.FormValue("cl"), req.FormValue("who")); err != nil {
+func setreviewer(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
+	if err := SetReviewer(ctxt, req.FormValue("cl"), req.FormValue("who")); err != nil {
 		fmt.Fprintf(w, "ERROR: %s\n", err)
 	} else {
 		fmt.Fprintf(w, "OK\n")
 	}
 }
 
-func fixone(w http.ResponseWriter, req *http.Request) {
-	if err := fixgolang(appengine.NewContext(req), "CL", req.FormValue("cl")); err != nil {
+func fixone(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
+	if err := fixgolang(ctxt, "CL", req.FormValue("cl")); err != nil {
 		fmt.Fprintf(w, "ERROR: %s\n", err)
 	} else {
 		fmt.Fprintf(w, "OK\n")

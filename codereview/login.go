@@ -14,14 +14,16 @@ import (
 
 	"app"
 
+	"code.google.com/p/goauth2/oauth"
+	"github.com/rsc/appstats"
+
 	"appengine"
 	"appengine/urlfetch"
-	"code.google.com/p/goauth2/oauth"
 )
 
 func init() {
-	http.HandleFunc("/admin/codelogin", codelogin)
-	http.HandleFunc("/codetoken", codetoken)
+	http.Handle("/admin/codelogin", appstats.NewHandler(codelogin))
+	http.Handle("/codetoken", appstats.NewHandler(codetoken))
 }
 
 func oauthConfig(ctxt appengine.Context) (*oauth.Config, error) {
@@ -46,8 +48,7 @@ func oauthConfig(ctxt appengine.Context) (*oauth.Config, error) {
 	return cfg, nil
 }
 
-func codelogin(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
+func codelogin(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	randState, err := randomID()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -78,9 +79,7 @@ func codelogin(w http.ResponseWriter, req *http.Request) {
 	http.Redirect(w, req, authURL, 301)
 }
 
-func codetoken(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
-
+func codetoken(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	var randState string
 	if err := app.ReadMeta(ctxt, "codelogin.random", &randState); err != nil {
 		panic(err)
@@ -133,11 +132,11 @@ func randomID() (string, error) {
 }
 
 func init() {
-	http.HandleFunc("/admin/testissue", testIssue)
+	http.Handle("/admin/testissue", appstats.NewHandler(testIssue))
 }
 
-func testIssue(w http.ResponseWriter, req *http.Request) {
-	err := postIssueComment(appengine.NewContext(req), "7737", "comment!")
+func testIssue(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
+	err := postIssueComment(ctxt, "7737", "comment!")
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

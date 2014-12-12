@@ -18,6 +18,8 @@ import (
 
 	"appengine"
 	"appengine/taskqueue"
+
+	"github.com/rsc/appstats"
 )
 
 var taskfuncs = struct {
@@ -155,11 +157,10 @@ func Task(ctxt appengine.Context, taskName, funcName string, args ...interface{}
 }
 
 func init() {
-	http.HandleFunc("/admin/app/taskpost", taskpost)
+	http.Handle("/admin/app/taskpost", appstats.NewHandler(taskpost))
 }
 
-func taskpost(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
+func taskpost(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	req.ParseForm()
 	taskName := req.FormValue("task")
 	funcName := req.FormValue("func")
@@ -228,11 +229,10 @@ func taskpost(w http.ResponseWriter, req *http.Request) {
 func init() {
 	TaskFunc("ping", ping, "default", nil)
 	TaskFunc("pong", pong, "default", nil)
-	http.HandleFunc("/admin/app/pingpong", startPing)
+	http.Handle("/admin/app/pingpong", appstats.NewHandler(startPing))
 }
 
-func startPing(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
+func startPing(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	n, _ := strconv.Atoi(req.FormValue("n"))
 	if n < 0 {
 		ctxt.Errorf("invalid pingpong %q", req.FormValue("n"))

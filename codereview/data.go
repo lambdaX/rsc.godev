@@ -80,19 +80,21 @@ func updateCL(cl *CL) {
 	sort.Strings(cl.MailedIssue)
 
 	cl.NeedMailIssue = nil
-	if cl.Active && (strings.HasPrefix(cl.Repo, "go.") || cl.Repo == "go") {
-		mailed := make(map[string]bool)
-		for _, issue := range cl.MailedIssue {
-			mailed[issue] = true
-		}
-		for _, issue := range cl.DescIssue {
-			if !mailed[issue] {
-				cl.NeedMailIssue = append(cl.NeedMailIssue, issue)
+	/*
+		if cl.Active && (strings.HasPrefix(cl.Repo, "go.") || cl.Repo == "go") {
+			mailed := make(map[string]bool)
+			for _, issue := range cl.MailedIssue {
 				mailed[issue] = true
 			}
+			for _, issue := range cl.DescIssue {
+				if !mailed[issue] {
+					cl.NeedMailIssue = append(cl.NeedMailIssue, issue)
+					mailed[issue] = true
+				}
+			}
+			sort.Strings(cl.NeedMailIssue)
 		}
-		sort.Strings(cl.NeedMailIssue)
-	}
+	*/
 
 	if cl.Dead {
 		cl.MessagesLoaded = true

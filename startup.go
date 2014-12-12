@@ -8,8 +8,10 @@ import (
 	"net/http"
 
 	"app"
+
+	"github.com/rsc/appstats"
 )
 
 func init() {
-	http.HandleFunc("/status", app.StatusPage)
+	http.Handle("/status", appstats.NewHandler(app.StatusPage))
 }

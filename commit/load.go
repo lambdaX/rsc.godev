@@ -25,6 +25,8 @@ import (
 	"appengine/datastore"
 	"appengine/delay"
 	"appengine/urlfetch"
+
+	"github.com/rsc/appstats"
 )
 
 // code.google.com sends times in Mountain View time zone.
@@ -44,21 +46,20 @@ func init() {
 var laterLoad, laterLoadRev *delay.Function
 
 func init() {
-	http.HandleFunc("/admin/commit/load", startLoad)
-	http.HandleFunc("/admin/commit/kickoff", initialLoad)
-	http.HandleFunc("/admin/commit/status", status)
-	http.HandleFunc("/admin/commit/show/", show)
+	http.Handle("/admin/commit/load", appstats.NewHandler(startLoad))
+	http.Handle("/admin/commit/kickoff", appstats.NewHandler(initialLoad))
+	http.Handle("/admin/commit/status", appstats.NewHandler(status))
+	http.Handle("/admin/commit/show/", appstats.NewHandler(show))
 
 	laterLoad = delay.Func("commit.load", load)
 	laterLoadRev = delay.Func("commit.loadrev", loadRev)
 }
 
-func status(w http.ResponseWriter, req *http.Request) {
+func status(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	q := datastore.NewQuery("RevTodo").
 		Limit(100)
 
-	ctxt := appengine.NewContext(req)
 	it := q.Run(ctxt)
 	for {
 		var todo revTodo
@@ -70,9 +71,8 @@ func status(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func show(w http.ResponseWriter, req *http.Request) {
+func show(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	ctxt := appengine.NewContext(req)
 	var rev Rev
 	err := app.ReadData(ctxt, "Rev", strings.TrimPrefix(req.URL.Path, "/admin/commit/show/"), &rev)
 	if err != nil {
@@ -89,13 +89,11 @@ func show(w http.ResponseWriter, req *http.Request) {
 	w.Write(buf.Bytes())
 }
 
-func startLoad(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
+func startLoad(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	laterLoad.Call(ctxt)
 }
 
-func initialLoad(w http.ResponseWriter, req *http.Request) {
-	ctxt := appengine.NewContext(req)
+func initialLoad(ctxt appengine.Context, w http.ResponseWriter, req *http.Request) {
 	for repoBranch, hash := range initialRoots {
 		i := strings.Index(repoBranch, "/")
 		if i < 0 {
